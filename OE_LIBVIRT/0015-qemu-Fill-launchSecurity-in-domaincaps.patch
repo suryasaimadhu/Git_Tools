@@ -23,6 +23,11 @@ the x86_64 platform . So XML changes for these platforms
 by Euler libvirt 9.10 (loongarch,s390x, armv7, and aarch64) are excluded from this
 backport.
 
+3. Libvirt 9.10 does not support XML configurations for QEMU 9.0 and newer
+versions on any platform. Therefore, XML changes related to these versions
+are skipped as the current backporting effort is focused on supporting
+QEMU 8.2.
+
 Signed-off-by: Michal Privoznik <mprivozn@redhat.com>
 Reviewed-by: Jiri Denemark <jdenemar@redhat.com>
 Reviewed-by: Daniel P. Berrangé <berrange@redhat.com>
