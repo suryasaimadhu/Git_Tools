@@ -1,0 +1,424 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+
+def create_hyperlinks():
+    """Generate HTML hyperlinks for GitHub commit IDs"""
+    # Read repository configuration if exists
+    repos = [
+        "https://github.com/AMDEPYC/Linux_Backport/commit/",
+        "https://github.com/torvalds/linux/commit/"
+    ]
+    
+    # Check if additional repos file exists and add them
+    repo_file = os.path.expanduser("~/.repohelper_repos")
+    if os.path.exists(repo_file):
+        try:
+            with open(repo_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and line not in repos:
+                        repos.append(line)
+        except Exception as e:
+            print(f"Warning: Could not read repository file: {e}")
+    
+    # Display available repository options
+    print("Select a repository for creating hyperlinks:")
+    for idx, repo in enumerate(repos, 1):
+        print(f"{idx}) {repo}")
+    
+    # Get repository selection
+    while True:
+        try:
+            repo_choice = int(input("Enter your choice (1-{0}): ".format(len(repos))))
+            if 1 <= repo_choice <= len(repos):
+                break
+            else:
+                print(f"Invalid choice. Please enter a number between 1 and {len(repos)}.")
+        except ValueError:
+            print("Invalid input. Please enter a number.")
+    
+    # Set base URL based on selection
+    base_url = repos[repo_choice - 1]
+    
+    # Get commit IDs
+    print("\nEnter commit IDs (one per line).")
+    print("When finished, enter an empty line.")
+    
+    commit_ids = []
+    while True:
+        commit_id = input("Commit ID: ").strip()
+        if not commit_id:
+            break
+        commit_ids.append(commit_id)
+    
+    if not commit_ids:
+        print("No commit IDs provided. Exiting.")
+        return
+    
+    # Generate HTML content
+    html_content = """<!DOCTYPE html>
+<html>
+<head>
+    <title>GitHub Commit Hyperlinks</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 20px;
+            max-width: 800px;
+        }
+        h1 {
+            color: #333;
+        }
+        .link-container {
+            margin: 20px 0;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+        td {
+            padding: 8px;
+            vertical-align: top;
+        }
+        tr {
+            border-bottom: 1px solid #f0f0f0;
+        }
+        a {
+            color: #0366d6;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <h1>GitHub Commit Hyperlinks</h1>
+    <div class="link-container">
+"""
+    
+    # Add hyperlinks to HTML content in a table format for easy Excel copy/paste
+    html_content += """        <table>
+            <tbody>
+"""
+    for commit_id in commit_ids:
+        full_url = f"{base_url}{commit_id}"
+        # Display only the first 12 characters of the commit ID as link text
+        display_text = commit_id[:12] if len(commit_id) >= 12 else commit_id
+        html_content += f'                <tr><td><a href="{full_url}" target="_blank">{display_text}</a></td></tr>\n'
+    
+    html_content += """            </tbody>
+        </table>
+    </div>
+</body>
+</html>
+"""
+    
+    # Write HTML content to file
+    output_file = "github_commits.html"
+    with open(output_file, "w") as f:
+        f.write(html_content)
+    
+    print(f"\nHTML file with hyperlinks created: {os.path.abspath(output_file)}")
+
+def check_commits():
+    """Check commit information using a shell script"""
+    print("Commit Checker Tool")
+    print("-------------------")
+    
+    # First, check if we're in a Git repository
+    import subprocess
+    try:
+        result = subprocess.run(['git', 'rev-parse', '--is-inside-work-tree'], 
+                               capture_output=True, text=True)
+        if result.returncode != 0:
+            print("\033[0;31mError: Not in a Git repository.\033[0m")
+            print("\033[0;33mHint: Please run this command inside a Git repository.\033[0m")
+            return
+    except:
+        print("\033[0;31mError: Git command failed. Make sure Git is installed.\033[0m")
+        return
+    
+    # Create a temporary shell script
+    script_path = "/tmp/check_commits.sh"
+    script_content = """#!/bin/bash
+# Colors
+GREEN="\\033[0;32m"
+RED="\\033[0;31m"
+YELLOW="\\033[0;33m"
+RESET="\\033[0m"
+
+# Default log file path
+default_log_file="./git_log.txt"
+
+# Function to update the Git log file if necessary
+update_git_log_file() {
+    # Get the latest commit hash from the repository
+    latest_commit=$(git rev-parse HEAD 2>/dev/null)
+    if [[ $? -ne 0 ]]; then
+        echo -e "${RED}Error: This directory is not a Git repository.${RESET}"
+        exit 1
+    fi
+    
+    # Check if the log file exists
+    if [[ -f "$default_log_file" ]]; then
+        # Get the latest commit hash from the log file
+        log_tip=$(head -1 "$default_log_file" | grep -oE '[a-f0-9]{40}')
+        if [[ "$latest_commit" == "$log_tip" ]]; then
+            echo -e "${YELLOW}The log file is already up to date.${RESET}"
+            return
+        fi
+    fi
+    
+    # Update the log file
+    echo -e "${GREEN}Updating the Git log file...${RESET}"
+    git log > "$default_log_file"
+    if [[ $? -eq 0 ]]; then
+        echo -e "${GREEN}Git log file updated successfully.${RESET}"
+    else
+        echo -e "${RED}Failed to update the Git log file.${RESET}"
+        exit 1
+    fi
+}
+
+# Check and update the Git log file
+update_git_log_file
+
+# Load all commit hashes from the Git log into a variable (improves speed)
+log_commits=$(grep -oE '[a-f0-9]{40}' "$default_log_file")
+
+# Prompt for commit IDs
+echo "Enter commit IDs (one per line, empty line to finish):"
+commit_list=()
+
+# Read commits until empty line is entered
+while true; do
+    read -r commit
+    if [[ -z "$commit" ]]; then
+        break
+    fi
+    if [[ -n "$commit" ]]; then
+        commit_list+=("$commit")
+    fi
+done
+
+# Separate found and not found commits
+found_commits=()
+not_found_commits=()
+for commit in "${commit_list[@]}"; do
+    if echo "$log_commits" | grep -q "$commit"; then
+        found_commits+=("$commit")
+    else
+        not_found_commits+=("$commit")
+    fi
+done
+
+# Display results in the desired format
+echo ""
+echo -e "${GREEN}commits found:${RESET}"
+echo "--------------"
+printf "${GREEN}%s${RESET}\\n" "${found_commits[@]}"
+echo "--------------"
+echo -e "${RED}commits not found:${RESET}"
+echo "------------------"
+printf "${RED}%s${RESET}\\n" "${not_found_commits[@]}"
+echo "------------------"
+
+# Display summary
+echo ""
+echo -e "${GREEN}Summary:${RESET}"
+echo "------------------"
+echo "Total commits provided: ${#commit_list[@]}"
+echo -e "${GREEN}Commits found:${RESET} ${#found_commits[@]}"
+echo -e "${RED}Commits not found:${RESET} ${#not_found_commits[@]}"
+echo "------------------"
+"""
+    
+    # Write the script to the temporary file
+    try:
+        with open(script_path, 'w') as f:
+            f.write(script_content)
+        
+        # Make the script executable
+        subprocess.run(['chmod', '+x', script_path])
+        
+        # Execute the script in the current directory
+        subprocess.run([script_path], check=True)
+    except Exception as e:
+        print(f"Error executing commit checker script: {e}")
+    finally:
+        # Cleanup the temporary script
+        try:
+            os.remove(script_path)
+        except:
+            pass
+
+def reverse_commits():
+    """Reverse commit operations or analysis"""
+    print("Reverse Commit Tool")
+    print("------------------")
+    
+    print("Enter the commit IDs (one per line, empty line to finish):")
+    
+    commits = []
+    while True:
+        commit = input("> ").strip()
+        if not commit:
+            break
+        commits.append(commit)
+    
+    if not commits:
+        print("No commits provided. Exiting.")
+        return
+    
+    # Reverse the order of commits
+    reversed_commits = list(reversed(commits))
+    
+    print("\nOriginal order of commits:")
+    for idx, commit in enumerate(commits, 1):
+        print(f"{idx}. {commit}")
+    
+    print("\nReversed order of commits:")
+    for idx, commit in enumerate(reversed_commits, 1):
+        print(f"{idx}. {commit}")
+    
+    # Save to output file
+    output_file = "reversed_commits.txt"
+    with open(output_file, "w") as f:
+        for commit in reversed_commits:
+            f.write(f"{commit}\n")
+    
+    print(f"\nReversed commits have been saved to: {os.path.abspath(output_file)}")
+
+def modify_repositories():
+    """Add or remove repository URLs (admin function)"""
+    print("Repository Configuration Tool")
+    print("-----------------------------")
+    
+    # Check admin password
+    password = "Amd$1234!"  # Simple example password, should be more secure in real use
+    
+    user_input = input("Enter admin password: ")
+    if user_input != password:
+        print("Incorrect password. Access denied.")
+        return
+    
+    # Read existing repositories
+    repos = [
+        "https://github.com/AMDEPYC/Linux_Backport/commit/",
+        "https://github.com/torvalds/linux/commit/"
+    ]
+    
+    repo_file = os.path.expanduser("~/.repohelper_repos")
+    
+    # Load any custom repositories if the file exists
+    custom_repos = []
+    if os.path.exists(repo_file):
+        try:
+            with open(repo_file, 'r') as f:
+                custom_repos = [line.strip() for line in f if line.strip()]
+                # Add custom repos to the main list if not already there
+                for repo in custom_repos:
+                    if repo not in repos:
+                        repos.append(repo)
+        except Exception as e:
+            print(f"Warning: Could not read repository file: {e}")
+    
+    while True:
+        print("\nCurrent Repositories:")
+        for idx, repo in enumerate(repos, 1):
+            print(f"{idx}) {repo}")
+        
+        print("\nOptions:")
+        print("1. Add a new repository")
+        print("2. Remove a repository")
+        print("3. Save and exit")
+        
+        choice = input("\nEnter choice (1-3): ")
+        
+        if choice == "1":
+            new_repo = input("Enter new repository URL (must end with /commit/ or similar): ")
+            if new_repo and new_repo not in repos:
+                # Basic validation
+                if not new_repo.endswith("/"):
+                    new_repo += "/"
+                    
+                if "/commit/" not in new_repo and not new_repo.endswith("/commit/"):
+                    print("Warning: URL doesn't contain '/commit/' path. Adding it anyway.")
+                    
+                repos.append(new_repo)
+                print(f"Added: {new_repo}")
+            else:
+                print("Repository already exists or invalid input.")
+                
+        elif choice == "2":
+            if len(repos) <= 2:
+                print("Cannot remove default repositories.")
+                continue
+                
+            try:
+                idx = int(input(f"Enter repository number to remove (3-{len(repos)}): "))
+                if 3 <= idx <= len(repos):
+                    removed = repos.pop(idx - 1)
+                    print(f"Removed: {removed}")
+                else:
+                    print("Cannot remove default repositories.")
+            except ValueError:
+                print("Invalid input. Please enter a number.")
+                
+        elif choice == "3":
+            # Save custom repositories (excluding the default ones)
+            custom_repos = repos[2:]
+            try:
+                with open(repo_file, 'w') as f:
+                    for repo in custom_repos:
+                        f.write(f"{repo}\n")
+                print(f"Repository configuration saved to {repo_file}")
+            except Exception as e:
+                print(f"Error saving repository file: {e}")
+            break
+            
+        else:
+            print("Invalid choice. Please try again.")
+    
+    # Example of the file format and usage
+    print("\nExample usage for your reference:")
+    print("---------------------------------")
+    print("To create links for commits, run:")
+    print("  repohelper -l")
+    print("You'll now see your custom repositories in the list.")
+    print("For example: 'https://github.com/tianocore/edk2/commit/'")
+    print("After selecting a repository, enter commit IDs as before.")
+
+def main():
+    # A simpler approach that avoids help conflicts
+    if len(sys.argv) == 1 or sys.argv[1] in ['-h', '--help']:
+        print("usage: repohelper [OPTION]...")
+        print("\nRepository Helper Tools\n")
+        print("Commands:")
+        print("  -l, --link          Create GitHub hyperlinks for commit IDs")
+        print("  -c, --check         Check commit information")
+        print("  -r, --reverse       Reverse the order of commit IDs")
+        print("  -m, --modify        Modify repository configurations (admin only)")
+        print("  -h, --help          Show this help message and exit")
+        sys.exit(0)
+        
+    # Handle commands based on arguments
+    if sys.argv[1] in ['-l', '--link']:
+        create_hyperlinks()
+    elif sys.argv[1] in ['-c', '--check']:
+        check_commits()
+    elif sys.argv[1] in ['-r', '--reverse']:
+        reverse_commits()
+    elif sys.argv[1] in ['-m', '--modify']:
+        modify_repositories()
+    else:
+        print(f"repohelper: invalid option -- '{sys.argv[1]}'")
+        print("Try 'repohelper --help' for more information.")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
