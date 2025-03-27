@@ -58,11 +58,20 @@ def main():
         .link-container {
             margin: 20px 0;
         }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+        td {
+            padding: 8px;
+            vertical-align: top;
+        }
+        tr {
+            border-bottom: 1px solid #f0f0f0;
+        }
         a {
             color: #0366d6;
             text-decoration: none;
-            display: block;
-            margin: 5px 0;
         }
         a:hover {
             text-decoration: underline;
@@ -74,12 +83,19 @@ def main():
     <div class="link-container">
 """
     
-    # Add hyperlinks to HTML content
+    # Add hyperlinks to HTML content in a table format for easy Excel copy/paste
+    html_content += """        <table>
+            <tbody>
+"""
     for commit_id in commit_ids:
         full_url = f"{base_url}{commit_id}"
         # Display only the first 12 characters of the commit ID as link text
         display_text = commit_id[:12] if len(commit_id) >= 12 else commit_id
-        html_content += f'        <a href="{full_url}" target="_blank">{display_text}</a>\n'
+        html_content += f'                <tr><td><a href="{full_url}" target="_blank">{display_text}</a></td></tr>\n'
+    
+    html_content += """            </tbody>
+        </table>
+"""
     
     # Close HTML tags
     html_content += """    </div>
