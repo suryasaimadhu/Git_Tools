@@ -1,0 +1,288 @@
+From c5ae84fd890a51f82f15b5a9f65edf1841c29a9e Mon Sep 17 00:00:00 2001
+From: Michal Privoznik <mprivozn@redhat.com>
+Date: Tue, 11 Jun 2024 12:12:08 +0200
+Subject: [PATCH 02/15] conf: Move some members of virDomainSEVDef into
+ virDomainSEVCommonDef
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+commit d2cad18ca3c5dd88c416b6e4dd9c709f527b1dbe upstream
+
+Some parts of SEV are to be shared with SEV SNP. In order to
+reuse XML parsing / formatting code cleanly, let's move those
+common bits into a new struct (virDomainSEVCommonDef) and adjust
+rest of the code.
+
+[Backport Changes]
+
+1. In src/conf/domain_conf.h, the struct member user_id,secret_header and
+secret in the struct _virDomainSEVDef is retained. This member was
+originally introduced in commit cbc574f26c7fa ("conf: qemu: add libvirt
+support reuse id for Hygon CSV") and 66ab1f1ce7ae3 ("conf: qemu: support
+provide inject secret for Hygon CSV") as part of the Hygon hardware
+support changes.
+
+Signed-off-by: Michal Privoznik <mprivozn@redhat.com>
+Reviewed-by: Daniel P. Berrangé <berrange@redhat.com>
+Signed-off-by: suryasaimadhu <saimadhu.koyyalaharivenkata@amd.com>
+---
+ src/conf/domain_conf.c            | 55 +++++++++++++++++++++----------
+ src/conf/domain_conf.h            | 13 +++++---
+ src/conf/schemas/domaincommon.rng | 24 ++++++++------
+ src/conf/virconftypes.h           |  2 ++
+ src/qemu/qemu_command.c           |  8 ++---
+ src/qemu/qemu_process.c           | 12 +++----
+ src/qemu/qemu_validate.c          |  2 +-
+ 7 files changed, 74 insertions(+), 42 deletions(-)
+
+diff --git a/src/conf/domain_conf.c b/src/conf/domain_conf.c
+index b3475757c3aa..f2f17cfd8339 100644
+--- a/src/conf/domain_conf.c
++++ b/src/conf/domain_conf.c
+@@ -13511,8 +13511,8 @@ virDomainMemoryTargetDefParseXML(xmlNodePtr node,
+ 
+ 
+ static int
+-virDomainSEVDefParseXML(virDomainSEVDef *def,
+-                        xmlXPathContextPtr ctxt)
++virDomainSEVCommonDefParseXML(virDomainSEVCommonDef *def,
++                              xmlXPathContextPtr ctxt)
+ {
+     int rc;
+ 
+@@ -13520,12 +13520,6 @@ virDomainSEVDefParseXML(virDomainSEVDef *def,
+                                &def->kernel_hashes) < 0)
+         return -1;
+ 
+-    if (virXPathUIntBase("string(./policy)", ctxt, 16, &def->policy) < 0) {
+-        virReportError(VIR_ERR_XML_ERROR, "%s",
+-                       _("failed to get launch security policy"));
+-        return -1;
+-    }
+-
+     /* the following attributes are platform dependent and if missing, we can
+      * autofill them from domain capabilities later
+      */
+@@ -13548,6 +13542,23 @@ virDomainSEVDefParseXML(virDomainSEVDef *def,
+         return -1;
+     }
+ 
++    return 0;
++}
++
++
++static int
++virDomainSEVDefParseXML(virDomainSEVDef *def,
++                        xmlXPathContextPtr ctxt)
++{
++    if (virDomainSEVCommonDefParseXML(&def->common, ctxt) < 0)
++        return -1;
++
++    if (virXPathUIntBase("string(./policy)", ctxt, 16, &def->policy) < 0) {
++        virReportError(VIR_ERR_XML_ERROR, "%s",
++                       _("failed to get launch security policy"));
++        return -1;
++    }
++
+     def->dh_cert = virXPathString("string(./dhCert)", ctxt);
+     def->session = virXPathString("string(./session)", ctxt);
+     def->user_id = virXPathString("string(./userid)", ctxt);
+@@ -26586,6 +26597,24 @@ virDomainKeyWrapDefFormat(virBuffer *buf, virDomainKeyWrapDef *keywrap)
+ }
+ 
+ 
++static void
++virDomainSEVCommonDefFormat(virBuffer *attrBuf,
++                            virBuffer *childBuf,
++                            virDomainSEVCommonDef *def)
++{
++    if (def->kernel_hashes != VIR_TRISTATE_BOOL_ABSENT)
++        virBufferAsprintf(attrBuf, " kernelHashes='%s'",
++                          virTristateBoolTypeToString(def->kernel_hashes));
++
++    if (def->haveCbitpos)
++        virBufferAsprintf(childBuf, "<cbitpos>%d</cbitpos>\n", def->cbitpos);
++
++    if (def->haveReducedPhysBits)
++        virBufferAsprintf(childBuf, "<reducedPhysBits>%d</reducedPhysBits>\n",
++                          def->reduced_phys_bits);
++}
++
++
+ static void
+ virDomainSecDefFormat(virBuffer *buf, virDomainSecDef *sec)
+ {
+@@ -26602,16 +26631,8 @@ virDomainSecDefFormat(virBuffer *buf, virDomainSecDef *sec)
+     case VIR_DOMAIN_LAUNCH_SECURITY_SEV: {
+         virDomainSEVDef *sev = &sec->data.sev;
+ 
+-        if (sev->kernel_hashes != VIR_TRISTATE_BOOL_ABSENT)
+-            virBufferAsprintf(&attrBuf, " kernelHashes='%s'",
+-                              virTristateBoolTypeToString(sev->kernel_hashes));
+-
+-        if (sev->haveCbitpos)
+-            virBufferAsprintf(&childBuf, "<cbitpos>%d</cbitpos>\n", sev->cbitpos);
++        virDomainSEVCommonDefFormat(&attrBuf, &childBuf, &sev->common);
+ 
+-        if (sev->haveReducedPhysBits)
+-            virBufferAsprintf(&childBuf, "<reducedPhysBits>%d</reducedPhysBits>\n",
+-                              sev->reduced_phys_bits);
+         virBufferAsprintf(&childBuf, "<policy>0x%04x</policy>\n", sev->policy);
+         if (sev->dh_cert)
+             virBufferEscapeString(&childBuf, "<dhCert>%s</dhCert>\n", sev->dh_cert);
+diff --git a/src/conf/domain_conf.h b/src/conf/domain_conf.h
+index f0e5535013ff..90ccdeaf815f 100644
+--- a/src/conf/domain_conf.h
++++ b/src/conf/domain_conf.h
+@@ -2864,15 +2864,20 @@ typedef enum {
+ } virDomainLaunchSecurity;
+ 
+ 
+-struct _virDomainSEVDef {
+-    char *dh_cert;
+-    char *session;
+-    unsigned int policy;
++struct _virDomainSEVCommonDef {
+     bool haveCbitpos;
+     unsigned int cbitpos;
+     bool haveReducedPhysBits;
+     unsigned int reduced_phys_bits;
+     virTristateBool kernel_hashes;
++};
++
++
++struct _virDomainSEVDef {
++    virDomainSEVCommonDef common;
++    char *dh_cert;
++    char *session;
++    unsigned int policy;
+     char *user_id;
+     char *secret_header;
+     char *secret;
+diff --git a/src/conf/schemas/domaincommon.rng b/src/conf/schemas/domaincommon.rng
+index f31603b2fd6a..966e5831f41d 100644
+--- a/src/conf/schemas/domaincommon.rng
++++ b/src/conf/schemas/domaincommon.rng
+@@ -527,6 +527,19 @@
+     </element>
+   </define>
+ 
++  <define name="launchSecuritySEVCommon">
++    <optional>
++      <element name="cbitpos">
++        <data type="unsignedInt"/>
++      </element>
++    </optional>
++    <optional>
++      <element name="reducedPhysBits">
++        <data type="unsignedInt"/>
++      </element>
++    </optional>
++  </define>
++
+   <define name="launchSecuritySEV">
+     <attribute name="type">
+       <value>sev</value>
+@@ -537,16 +550,7 @@
+       </attribute>
+     </optional>
+     <interleave>
+-      <optional>
+-        <element name="cbitpos">
+-          <data type="unsignedInt"/>
+-        </element>
+-      </optional>
+-      <optional>
+-        <element name="reducedPhysBits">
+-          <data type="unsignedInt"/>
+-        </element>
+-      </optional>
++      <ref name="launchSecuritySEVCommon"/>
+       <element name="policy">
+         <ref name="hexuint"/>
+       </element>
+diff --git a/src/conf/virconftypes.h b/src/conf/virconftypes.h
+index bcdcb8b825b9..d175e548983e 100644
+--- a/src/conf/virconftypes.h
++++ b/src/conf/virconftypes.h
+@@ -210,6 +210,8 @@ typedef struct _virDomainResctrlMonDef virDomainResctrlMonDef;
+ 
+ typedef struct _virDomainResourceDef virDomainResourceDef;
+ 
++typedef struct _virDomainSEVCommonDef virDomainSEVCommonDef;
++
+ typedef struct _virDomainSEVDef virDomainSEVDef;
+ 
+ typedef struct _virDomainSecDef virDomainSecDef;
+diff --git a/src/qemu/qemu_command.c b/src/qemu/qemu_command.c
+index 7ca4397dfe3e..9cb4d54538b4 100644
+--- a/src/qemu/qemu_command.c
++++ b/src/qemu/qemu_command.c
+@@ -9725,7 +9725,7 @@ qemuBuildSEVCommandLine(virDomainObj *vm, virCommand *cmd,
+     g_autofree char *secretpath = NULL;
+ 
+     VIR_DEBUG("policy=0x%x cbitpos=%d reduced_phys_bits=%d",
+-              sev->policy, sev->cbitpos, sev->reduced_phys_bits);
++              sev->policy, sev->common.cbitpos, sev->common.reduced_phys_bits);
+ 
+     if (sev->user_id)
+         VIR_DEBUG("user_id=%s", sev->user_id);
+@@ -9743,13 +9743,13 @@ qemuBuildSEVCommandLine(virDomainObj *vm, virCommand *cmd,
+         secretpath = g_strdup_printf("%s/secret.base64", priv->libDir);
+ 
+     if (qemuMonitorCreateObjectProps(&props, "sev-guest", "lsec0",
+-                                     "u:cbitpos", sev->cbitpos,
+-                                     "u:reduced-phys-bits", sev->reduced_phys_bits,
++                                     "u:cbitpos", sev->common.cbitpos,
++                                     "u:reduced-phys-bits", sev->common.reduced_phys_bits,
+                                      "u:policy", sev->policy,
+                                      "S:user-id", sev->user_id,
+                                      "S:dh-cert-file", dhpath,
+                                      "S:session-file", sessionpath,
+-                                     "T:kernel-hashes", sev->kernel_hashes,
++                                     "T:kernel-hashes", sev->common.kernel_hashes,
+                                      "S:secret-header-file", secretheaderpath,
+                                      "S:secret-file", secretpath,
+                                      NULL) < 0)
+diff --git a/src/qemu/qemu_process.c b/src/qemu/qemu_process.c
+index 89dfd23c8417..36bf68ca43ed 100644
+--- a/src/qemu/qemu_process.c
++++ b/src/qemu/qemu_process.c
+@@ -6809,14 +6809,14 @@ qemuProcessUpdateSEVInfo(virDomainObj *vm)
+      * mandatory on QEMU cmdline
+      */
+     sevCaps = virQEMUCapsGetSEVCapabilities(qemuCaps);
+-    if (!sev->haveCbitpos) {
+-        sev->cbitpos = sevCaps->cbitpos;
+-        sev->haveCbitpos = true;
++    if (!sev->common.haveCbitpos) {
++        sev->common.cbitpos = sevCaps->cbitpos;
++        sev->common.haveCbitpos = true;
+     }
+ 
+-    if (!sev->haveReducedPhysBits) {
+-        sev->reduced_phys_bits = sevCaps->reduced_phys_bits;
+-        sev->haveReducedPhysBits = true;
++    if (!sev->common.haveReducedPhysBits) {
++        sev->common.reduced_phys_bits = sevCaps->reduced_phys_bits;
++        sev->common.haveReducedPhysBits = true;
+     }
+ 
+     return 0;
+diff --git a/src/qemu/qemu_validate.c b/src/qemu/qemu_validate.c
+index 5894e2bd26a1..a5c22ee4be92 100644
+--- a/src/qemu/qemu_validate.c
++++ b/src/qemu/qemu_validate.c
+@@ -1305,7 +1305,7 @@ qemuValidateDomainDef(const virDomainDef *def,
+                 return -1;
+             }
+ 
+-            if (def->sec->data.sev.kernel_hashes != VIR_TRISTATE_BOOL_ABSENT &&
++            if (def->sec->data.sev.common.kernel_hashes != VIR_TRISTATE_BOOL_ABSENT &&
+                 !virQEMUCapsGet(qemuCaps, QEMU_CAPS_SEV_GUEST_KERNEL_HASHES)) {
+                 virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+                                _("SEV measured direct kernel boot is not supported with this QEMU binary"));
+-- 
+2.43.0
+

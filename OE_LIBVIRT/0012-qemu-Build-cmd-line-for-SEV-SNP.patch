@@ -1,0 +1,121 @@
+From 53765f3119954e7c211fefbfba1bf6b489f4b852 Mon Sep 17 00:00:00 2001
+From: Michal Privoznik <mprivozn@redhat.com>
+Date: Wed, 12 Jun 2024 15:22:00 +0200
+Subject: [PATCH 12/15] qemu: Build cmd line for SEV-SNP
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+commit a1d850b300ad4018611f59df092a236c9004be7a upstream
+
+Pretty straightforward as qemu has 'sev-snp-guest' object which
+attributes maps pretty much 1:1 to our XML model. Except for
+@vcek where QEMU has 'vcek-disabled`, an inverted boolean, while
+we model it as virTristateBool. But that's easy to map too.
+
+Signed-off-by: Michal Privoznik <mprivozn@redhat.com>
+Reviewed-by: Daniel P. Berrangé <berrange@redhat.com>
+Signed-off-by: suryasaimadhu <saimadhu.koyyalaharivenkata@amd.com>
+---
+ src/qemu/qemu_command.c                       | 44 ++++++++++++++++++-
+ ...launch-security-sev-snp.x86_64-latest.args |  3 +-
+ 2 files changed, 44 insertions(+), 3 deletions(-)
+
+diff --git a/src/qemu/qemu_command.c b/src/qemu/qemu_command.c
+index 3f65e7c6123b..fd3425353186 100644
+--- a/src/qemu/qemu_command.c
++++ b/src/qemu/qemu_command.c
+@@ -7033,14 +7033,13 @@ qemuBuildMachineCommandLine(virCommand *cmd,
+     if (def->sec) {
+         switch (def->sec->sectype) {
+         case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
++        case VIR_DOMAIN_LAUNCH_SECURITY_SEV_SNP:
+             if (virQEMUCapsGet(qemuCaps, QEMU_CAPS_MACHINE_CONFIDENTAL_GUEST_SUPPORT)) {
+                 virBufferAddLit(&buf, ",confidential-guest-support=lsec0");
+             } else {
+                 virBufferAddLit(&buf, ",memory-encryption=lsec0");
+             }
+             break;
+-        case VIR_DOMAIN_LAUNCH_SECURITY_SEV_SNP:
+-            break;
+         case VIR_DOMAIN_LAUNCH_SECURITY_PV:
+             virBufferAddLit(&buf, ",confidential-guest-support=lsec0");
+             break;
+@@ -9764,6 +9763,46 @@ qemuBuildSEVCommandLine(virDomainObj *vm, virCommand *cmd,
+ }
+ 
+ 
++static int
++qemuBuildSEVSNPCommandLine(virDomainObj *vm,
++                           virCommand *cmd,
++                           virDomainSEVSNPDef *def)
++{
++    g_autoptr(virJSONValue) props = NULL;
++    qemuDomainObjPrivate *priv = vm->privateData;
++    virTristateBool vcek_disabled = VIR_TRISTATE_BOOL_ABSENT;
++
++    VIR_DEBUG("policy=0x%llx cbitpos=%d reduced_phys_bits=%d",
++              def->policy, def->common.cbitpos, def->common.reduced_phys_bits);
++
++    /* On QEMU cmd line, there's vcek-disabled which is an inverted boolean. */
++    if (def->vcek == VIR_TRISTATE_BOOL_YES) {
++        vcek_disabled = VIR_TRISTATE_BOOL_NO;
++    } else if (def->vcek == VIR_TRISTATE_BOOL_NO) {
++        vcek_disabled = VIR_TRISTATE_BOOL_YES;
++    }
++
++    if (qemuMonitorCreateObjectProps(&props, "sev-snp-guest", "lsec0",
++                                     "u:cbitpos", def->common.cbitpos,
++                                     "u:reduced-phys-bits", def->common.reduced_phys_bits,
++                                     "T:kernel-hashes", def->common.kernel_hashes,
++                                     "U:policy", def->policy,
++                                     "S:guest-visible-workarounds", def->guest_visible_workarounds,
++                                     "S:id-block", def->id_block,
++                                     "S:id-auth", def->id_auth,
++                                     "S:host-data", def->host_data,
++                                     "T:author-key-enabled", def->author_key,
++                                     "T:vcek-disabled", vcek_disabled,
++                                     NULL) < 0)
++        return -1;
++
++    if (qemuBuildObjectCommandlineFromJSON(cmd, props, priv->qemuCaps) < 0)
++        return -1;
++
++    return 0;
++}
++
++
+ static int
+ qemuBuildPVCommandLine(virDomainObj *vm, virCommand *cmd)
+ {
+@@ -9793,6 +9832,7 @@ qemuBuildSecCommandLine(virDomainObj *vm, virCommand *cmd,
+         return qemuBuildSEVCommandLine(vm, cmd, &sec->data.sev);
+         break;
+     case VIR_DOMAIN_LAUNCH_SECURITY_SEV_SNP:
++        return qemuBuildSEVSNPCommandLine(vm, cmd, &sec->data.sev_snp);
+         break;
+     case VIR_DOMAIN_LAUNCH_SECURITY_PV:
+         return qemuBuildPVCommandLine(vm, cmd);
+diff --git a/tests/qemuxml2argvdata/launch-security-sev-snp.x86_64-latest.args b/tests/qemuxml2argvdata/launch-security-sev-snp.x86_64-latest.args
+index 37ac58edb8d4..e74335f09d5c 100644
+--- a/tests/qemuxml2argvdata/launch-security-sev-snp.x86_64-latest.args
++++ b/tests/qemuxml2argvdata/launch-security-sev-snp.x86_64-latest.args
+@@ -10,7 +10,7 @@ XDG_CONFIG_HOME=/var/lib/libvirt/qemu/domain--1-QEMUGuest1/.config \
+ -name guest=QEMUGuest1,debug-threads=on \
+ -S \
+ -object '{"qom-type":"secret","id":"masterKey0","format":"raw","file":"/var/lib/libvirt/qemu/domain--1-QEMUGuest1/master-key.aes"}' \
+--machine pc,usb=off,dump-guest-core=off,memory-backend=pc.ram,acpi=off \
++-machine pc,usb=off,dump-guest-core=off,memory-backend=pc.ram,confidential-guest-support=lsec0,acpi=off \
+ -accel kvm \
+ -cpu qemu64 \
+ -m size=219136k \
+@@ -30,5 +30,6 @@ XDG_CONFIG_HOME=/var/lib/libvirt/qemu/domain--1-QEMUGuest1/.config \
+ -blockdev '{"driver":"host_device","filename":"/dev/HostVG/QEMUGuest1","node-name":"libvirt-1-storage","read-only":false}' \
+ -device '{"driver":"ide-hd","bus":"ide.0","unit":0,"drive":"libvirt-1-storage","id":"ide0-0-0","bootindex":1}' \
+ -audiodev '{"id":"audio1","driver":"none"}' \
++-object '{"qom-type":"sev-snp-guest","id":"lsec0","cbitpos":47,"reduced-phys-bits":1,"policy":196608,"guest-visible-workarounds":"bGlidmlydGxpYnZpcnRsaQ==","id-block":"bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZp","id-auth":"bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bA==","host-data":"bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnY=","author-key-enabled":true,"vcek-disabled":true}' \
+ -sandbox on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny \
+ -msg timestamp=on
+-- 
+2.43.0
+

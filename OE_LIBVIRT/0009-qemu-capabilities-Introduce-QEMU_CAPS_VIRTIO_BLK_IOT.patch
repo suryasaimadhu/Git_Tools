@@ -1,0 +1,57 @@
+From 7cf12723e9acf0516d0dcf998039267473bb1e5a Mon Sep 17 00:00:00 2001
+From: Peter Krempa <pkrempa@redhat.com>
+Date: Thu, 23 Feb 2023 15:47:11 +0100
+Subject: [PATCH 09/15] qemu: capabilities: Introduce
+ QEMU_CAPS_VIRTIO_BLK_IOTHREAD_MAPPING
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+commit e394def89219386e1f35e455438771c5db40a9d0 upstream
+
+The capability represents the support for mapping virtqueues to
+iothreads for the 'virtio-blk' device.
+
+Signed-off-by: Peter Krempa <pkrempa@redhat.com>
+Reviewed-by: Ján Tomko <jtomko@redhat.com>
+Signed-off-by: suryasaimadhu <saimadhu.koyyalaharivenkata@amd.com>
+---
+ src/qemu/qemu_capabilities.c | 2 ++
+ src/qemu/qemu_capabilities.h | 1 +
+ 2 files changed, 3 insertions(+)
+
+diff --git a/src/qemu/qemu_capabilities.c b/src/qemu/qemu_capabilities.c
+index 79414becfdc3..0f6f55773c22 100644
+--- a/src/qemu/qemu_capabilities.c
++++ b/src/qemu/qemu_capabilities.c
+@@ -699,6 +699,7 @@ VIR_ENUM_IMPL(virQEMUCaps,
+               "run-with.async-teardown", /* QEMU_CAPS_RUN_WITH_ASYNC_TEARDOWN */
+               "virtio-blk-vhost-vdpa", /* QEMU_CAPS_DEVICE_VIRTIO_BLK_VHOST_VDPA */
+               "smp-clusters", /* QEMU_CAPS_SMP_CLUSTERS */
++              "virtio-blk.iothread-mapping", /* QEMU_CAPS_VIRTIO_BLK_IOTHREAD_MAPPING */
+     );
+ 
+ 
+@@ -1424,6 +1425,7 @@ static struct virQEMUCapsDevicePropsFlags virQEMUCapsDevicePropsVirtioBlk[] = {
+     { "scsi", QEMU_CAPS_VIRTIO_BLK_SCSI, virQEMUCapsDevicePropsVirtioBlkSCSIDefault },
+     { "queue-size", QEMU_CAPS_VIRTIO_BLK_QUEUE_SIZE, NULL },
+     { "acpi-index", QEMU_CAPS_ACPI_INDEX, NULL },
++    { "iothread-vq-mapping", QEMU_CAPS_VIRTIO_BLK_IOTHREAD_MAPPING, NULL },
+ };
+ 
+ static struct virQEMUCapsDevicePropsFlags virQEMUCapsDevicePropsVirtioNet[] = {
+diff --git a/src/qemu/qemu_capabilities.h b/src/qemu/qemu_capabilities.h
+index 959fbe637873..9a0de86c066a 100644
+--- a/src/qemu/qemu_capabilities.h
++++ b/src/qemu/qemu_capabilities.h
+@@ -678,6 +678,7 @@ typedef enum { /* virQEMUCapsFlags grouping marker for syntax-check */
+     QEMU_CAPS_RUN_WITH_ASYNC_TEARDOWN, /* asynchronous teardown -run-with async-teardown=on|off */
+     QEMU_CAPS_DEVICE_VIRTIO_BLK_VHOST_VDPA, /* virtio-blk-vhost-vdpa block driver */
+     QEMU_CAPS_SMP_CLUSTERS, /* -smp clusters= */
++    QEMU_CAPS_VIRTIO_BLK_IOTHREAD_MAPPING, /* virtio-blk supports per-virtqueue iothread mapping */
+ 
+     QEMU_CAPS_LAST /* this must always be the last item */
+ } virQEMUCapsFlags;
+-- 
+2.43.0
+

@@ -1,0 +1,95 @@
+From 24ae72b7af3a607b118d16368529d896d6c361b4 Mon Sep 17 00:00:00 2001
+From: Michal Privoznik <mprivozn@redhat.com>
+Date: Tue, 11 Jun 2024 13:00:58 +0200
+Subject: [PATCH 04/15] conf: Separate SEV formatting into a function
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+commit faa3548ed5f7d389810669e9f723029bc937fbbf upstream
+
+To avoid convolution of switch() inside of virDomainSecDefFormat() even
+more (as new sectypes are added), move formatting into a separate
+function.
+
+[Backport Changes]
+
+1.In src/conf/domain_conf.c, in function virDomainSecDefFormat(),current
+commit modifies switch case VIR_DOMAIN_LAUNCH_SECURITY_SEV and migrates
+its contents into a separate function for improved code clarity and
+maintainability. As part of this migration, an if logic that verifies the
+existence of 'user_id','secret_header' and 'secret' before calling
+virBufferEscapeString() was also moved. This condition was originally
+introduced in commit cbc574f26c7fa ("conf: qemu: add libvirt support reuse id
+for Hygon CSV") and  66ab1f1ce7ae3 ("conf: qemu: support provide inject
+secret for Hygon CSV") as part of adding support for Hygon hardware. This
+refactoring ensures that these changes are preserved.
+
+Signed-off-by: Michal Privoznik <mprivozn@redhat.com>
+Reviewed-by: Daniel P. Berrangé <berrange@redhat.com>
+Signed-off-by: suryasaimadhu <saimadhu.koyyalaharivenkata@amd.com>
+---
+ src/conf/domain_conf.c | 39 +++++++++++++++++++++------------------
+ 1 file changed, 21 insertions(+), 18 deletions(-)
+
+diff --git a/src/conf/domain_conf.c b/src/conf/domain_conf.c
+index 3a790602e279..f88369f55516 100644
+--- a/src/conf/domain_conf.c
++++ b/src/conf/domain_conf.c
+@@ -26603,6 +26603,25 @@ virDomainSEVCommonDefFormat(virBuffer *attrBuf,
+ }
+ 
+ 
++static void
++virDomainSEVDefFormat(virBuffer *attrBuf,
++                      virBuffer *childBuf,
++                      virDomainSEVDef *def)
++{
++    virDomainSEVCommonDefFormat(attrBuf, childBuf, &def->common);
++
++    virBufferAsprintf(childBuf, "<policy>0x%04x</policy>\n", def->policy);
++    virBufferEscapeString(childBuf, "<dhCert>%s</dhCert>\n", def->dh_cert);
++    virBufferEscapeString(childBuf, "<session>%s</session>\n", def->session);
++        if (def->user_id)
++            virBufferEscapeString(childBuf, "<userid>%s</userid>\n", def->user_id);
++        if (def->secret_header)
++            virBufferEscapeString(childBuf, "<secretHeader>%s</secretHeader>\n", def->secret_header);
++        if (def->secret)
++            virBufferEscapeString(childBuf, "<secret>%s</secret>\n", def->secret);
++}
++
++
+ static void
+ virDomainSecDefFormat(virBuffer *buf, virDomainSecDef *sec)
+ {
+@@ -26616,25 +26635,9 @@ virDomainSecDefFormat(virBuffer *buf, virDomainSecDef *sec)
+                       virDomainLaunchSecurityTypeToString(sec->sectype));
+ 
+     switch ((virDomainLaunchSecurity) sec->sectype) {
+-    case VIR_DOMAIN_LAUNCH_SECURITY_SEV: {
+-        virDomainSEVDef *sev = &sec->data.sev;
+-
+-        virDomainSEVCommonDefFormat(&attrBuf, &childBuf, &sev->common);
+-
+-        virBufferAsprintf(&childBuf, "<policy>0x%04x</policy>\n", sev->policy);
+-        virBufferEscapeString(&childBuf, "<dhCert>%s</dhCert>\n", sev->dh_cert);
+-
+-        virBufferEscapeString(&childBuf, "<session>%s</session>\n", sev->session);
+-
+-        if (sev->user_id)
+-            virBufferEscapeString(&childBuf, "<userid>%s</userid>\n", sev->user_id);
+-        if (sev->secret_header)
+-            virBufferEscapeString(&childBuf, "<secretHeader>%s</secretHeader>\n", sev->secret_header);
+-        if (sev->secret)
+-            virBufferEscapeString(&childBuf, "<secret>%s</secret>\n", sev->secret);
+-
++    case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
++        virDomainSEVDefFormat(&attrBuf, &childBuf, &sec->data.sev);
+         break;
+-    }
+ 
+     case VIR_DOMAIN_LAUNCH_SECURITY_PV:
+     case VIR_DOMAIN_LAUNCH_SECURITY_CVM:
+-- 
+2.43.0
+

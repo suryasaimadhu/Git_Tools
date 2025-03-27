@@ -1,0 +1,184 @@
+From 1346daa9896db6c8ccc019086204d4d8f297226a Mon Sep 17 00:00:00 2001
+From: Michal Privoznik <mprivozn@redhat.com>
+Date: Wed, 12 Jun 2024 09:29:59 +0200
+Subject: [PATCH 06/15] src: Convert some _virDomainSecDef::sectype checks to
+ switch()
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+commit 7d16c296e3f0ed61443d3095fd6f8951de57f79d upstream
+
+In a few instances there is a plain if() check for
+_virDomainSecDef::sectype. While this works perfectly for now,
+soon there'll be another type and we can utilize compiler to
+identify all the places that need adaptation. Switch those if()
+statements to switch().
+
+[Backport Changes]
+
+1.The enumeration value VIR_DOMAIN_LAUNCH_SECURITY_CVM, a member of the
+virDomainLaunchSecurity enum, was introduced in libvirt as part of
+CSV support in commit ddf9053ad7d. However, the recent upstream patch's
+switch statements do not account for this new enum member. This backport
+ensures that VIR_DOMAIN_LAUNCH_SECURITY_CVM is correctly handled in all
+the newly added switch statements by adding the appropriate case block in
+all affected files. This change prevents compiler warnings and enhances
+the completeness of the code.
+
+Signed-off-by: Michal Privoznik <mprivozn@redhat.com>
+Reviewed-by: Daniel P. Berrangé <berrange@redhat.com>
+Signed-off-by: suryasaimadhu <saimadhu.koyyalaharivenkata@amd.com>
+---
+ src/qemu/qemu_cgroup.c      | 19 +++++++++++++++----
+ src/qemu/qemu_driver.c      | 17 +++++++++++++++--
+ src/qemu/qemu_process.c     | 18 ++++++++++++++----
+ src/security/security_dac.c | 34 +++++++++++++++++++++++++++-------
+ 4 files changed, 71 insertions(+), 17 deletions(-)
+
+diff --git a/src/qemu/qemu_cgroup.c b/src/qemu/qemu_cgroup.c
+index 47402b37507b..1280989a0170 100644
+--- a/src/qemu/qemu_cgroup.c
++++ b/src/qemu/qemu_cgroup.c
+@@ -844,10 +844,21 @@ qemuSetupDevicesCgroup(virDomainObj *vm)
+             return -1;
+     }
+ 
+-    if (vm->def->sec &&
+-        vm->def->sec->sectype == VIR_DOMAIN_LAUNCH_SECURITY_SEV &&
+-        qemuSetupSEVCgroup(vm) < 0)
+-        return -1;
++    if (vm->def->sec) {
++        switch (vm->def->sec->sectype) {
++        case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
++            if (qemuSetupSEVCgroup(vm) < 0)
++                return -1;
++            break;
++        case VIR_DOMAIN_LAUNCH_SECURITY_PV:
++            break;
++	case VIR_DOMAIN_LAUNCH_SECURITY_CVM:
++        case VIR_DOMAIN_LAUNCH_SECURITY_NONE:
++        case VIR_DOMAIN_LAUNCH_SECURITY_LAST:
++            virReportEnumRangeError(virDomainLaunchSecurity, vm->def->sec->sectype);
++            return -1;
++        }
++    }
+ 
+     return 0;
+ }
+diff --git a/src/qemu/qemu_driver.c b/src/qemu/qemu_driver.c
+index df275c403c78..1aab51dea82d 100644
+--- a/src/qemu/qemu_driver.c
++++ b/src/qemu/qemu_driver.c
+@@ -19105,10 +19105,23 @@ qemuDomainGetLaunchSecurityInfo(virDomainPtr domain,
+     if (virDomainGetLaunchSecurityInfoEnsureACL(domain->conn, vm->def) < 0)
+         goto cleanup;
+ 
+-    if (vm->def->sec &&
+-        vm->def->sec->sectype == VIR_DOMAIN_LAUNCH_SECURITY_SEV) {
++    if (!vm->def->sec) {
++        ret = 0;
++        goto cleanup;
++    }
++
++    switch (vm->def->sec->sectype) {
++    case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
+         if (qemuDomainGetSEVInfo(vm, params, nparams, flags) < 0)
+             goto cleanup;
++        break;
++    case VIR_DOMAIN_LAUNCH_SECURITY_PV:
++        break;
++    case VIR_DOMAIN_LAUNCH_SECURITY_CVM:
++    case VIR_DOMAIN_LAUNCH_SECURITY_NONE:
++    case VIR_DOMAIN_LAUNCH_SECURITY_LAST:
++        virReportEnumRangeError(virDomainLaunchSecurity, vm->def->sec->sectype);
++        return -1;
+     }
+ 
+     ret = 0;
+diff --git a/src/qemu/qemu_process.c b/src/qemu/qemu_process.c
+index 07a8f19aefa3..b25edebd68e7 100644
+--- a/src/qemu/qemu_process.c
++++ b/src/qemu/qemu_process.c
+@@ -6977,11 +6977,21 @@ qemuProcessPrepareDomain(virQEMUDriver *driver,
+     for (i = 0; i < vm->def->nshmems; i++)
+         qemuDomainPrepareShmemChardev(vm->def->shmems[i]);
+ 
+-    if (vm->def->sec &&
+-        vm->def->sec->sectype == VIR_DOMAIN_LAUNCH_SECURITY_SEV) {
+-        VIR_DEBUG("Updating SEV platform info");
+-        if (qemuProcessUpdateSEVInfo(vm) < 0)
++    if (vm->def->sec) {
++        switch (vm->def->sec->sectype) {
++        case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
++            VIR_DEBUG("Updating SEV platform info");
++            if (qemuProcessUpdateSEVInfo(vm) < 0)
++                return -1;
++            break;
++        case VIR_DOMAIN_LAUNCH_SECURITY_PV:
++            break;
++        case VIR_DOMAIN_LAUNCH_SECURITY_CVM:
++        case VIR_DOMAIN_LAUNCH_SECURITY_NONE:
++        case VIR_DOMAIN_LAUNCH_SECURITY_LAST:
++            virReportEnumRangeError(virDomainLaunchSecurity, vm->def->sec->sectype);
+             return -1;
++        }
+     }
+ 
+     return 0;
+diff --git a/src/security/security_dac.c b/src/security/security_dac.c
+index 96aebfce5b0c..4be9174704ea 100644
+--- a/src/security/security_dac.c
++++ b/src/security/security_dac.c
+@@ -1977,10 +1977,20 @@ virSecurityDACRestoreAllLabel(virSecurityManager *mgr,
+             rc = -1;
+     }
+ 
+-    if (def->sec &&
+-        def->sec->sectype == VIR_DOMAIN_LAUNCH_SECURITY_SEV) {
+-        if (virSecurityDACRestoreSEVLabel(mgr, def) < 0)
+-            rc = -1;
++    if (def->sec) {
++        switch (def->sec->sectype) {
++        case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
++            if (virSecurityDACRestoreSEVLabel(mgr, def) < 0)
++                rc = -1;
++            break;
++        case VIR_DOMAIN_LAUNCH_SECURITY_PV:
++            break;
++	case VIR_DOMAIN_LAUNCH_SECURITY_CVM:
++        case VIR_DOMAIN_LAUNCH_SECURITY_NONE:
++        case VIR_DOMAIN_LAUNCH_SECURITY_LAST:
++            virReportEnumRangeError(virDomainLaunchSecurity, def->sec->sectype);
++            return -1;
++        }
+     }
+ 
+     for (i = 0; i < def->nsysinfo; i++) {
+@@ -2201,10 +2211,20 @@ virSecurityDACSetAllLabel(virSecurityManager *mgr,
+             return -1;
+     }
+ 
+-    if (def->sec &&
+-        def->sec->sectype == VIR_DOMAIN_LAUNCH_SECURITY_SEV) {
+-        if (virSecurityDACSetSEVLabel(mgr, def) < 0)
++    if (def->sec) {
++        switch (def->sec->sectype) {
++        case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
++            if (virSecurityDACSetSEVLabel(mgr, def) < 0)
++                return -1;
++            break;
++        case VIR_DOMAIN_LAUNCH_SECURITY_PV:
++            break;
++        case VIR_DOMAIN_LAUNCH_SECURITY_CVM:
++        case VIR_DOMAIN_LAUNCH_SECURITY_NONE:
++        case VIR_DOMAIN_LAUNCH_SECURITY_LAST:
++            virReportEnumRangeError(virDomainLaunchSecurity, def->sec->sectype);
+             return -1;
++        }
+     }
+ 
+     if (virSecurityDACGetImageIds(secdef, priv, &user, &group))
+-- 
+2.43.0
+

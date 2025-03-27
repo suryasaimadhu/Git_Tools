@@ -1,0 +1,60 @@
+From d6de76dd54b9d3f9a401cdc17a06ca78cea9b36a Mon Sep 17 00:00:00 2001
+From: Michal Privoznik <mprivozn@redhat.com>
+Date: Tue, 11 Jun 2024 11:53:43 +0200
+Subject: [PATCH 08/15] qemu: Report snp-policy in
+ virDomainGetLaunchSecurityInfo()
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+commit be26d0ebbed6167cef69f892ca0e7618fefa9b91 upstream
+
+Signed-off-by: Michal Privoznik <mprivozn@redhat.com>
+Reviewed-by: Daniel P. Berrangé <berrange@redhat.com>
+Signed-off-by: suryasaimadhu <saimadhu.koyyalaharivenkata@amd.com>
+---
+ include/libvirt/libvirt-domain.h | 10 ++++++++++
+ src/qemu/qemu_driver.c           |  6 ++++++
+ 2 files changed, 16 insertions(+)
+
+diff --git a/include/libvirt/libvirt-domain.h b/include/libvirt/libvirt-domain.h
+index f980288c184f..5cfb475924e8 100644
+--- a/include/libvirt/libvirt-domain.h
++++ b/include/libvirt/libvirt-domain.h
+@@ -6322,6 +6322,16 @@ int virDomainSetLifecycleAction(virDomainPtr domain,
+  */
+ # define VIR_DOMAIN_LAUNCH_SECURITY_SEV_POLICY "sev-policy"
+ 
++/**
++ * VIR_DOMAIN_LAUNCH_SECURITY_SEV_SNP_POLICY:
++ *
++ * Macro represents the policy of the SEV-SNP guest,
++ * as VIR_TYPED_PARAM_ULLONG.
++ *
++ * Since: 10.5.0
++ */
++# define VIR_DOMAIN_LAUNCH_SECURITY_SEV_SNP_POLICY "sev-snp-policy"
++
+ /**
+  * VIR_DOMAIN_LAUNCH_SECURITY_SEV_SECRET_HEADER:
+  *
+diff --git a/src/qemu/qemu_driver.c b/src/qemu/qemu_driver.c
+index 5e295e1df328..e79649e676b0 100644
+--- a/src/qemu/qemu_driver.c
++++ b/src/qemu/qemu_driver.c
+@@ -19082,6 +19082,12 @@ qemuDomainGetSEVInfo(virDomainObj *vm,
+         break;
+ 
+     case QEMU_MONITOR_SEV_GUEST_TYPE_SEV_SNP:
++        if (virTypedParamsAddULLong(params, nparams, &maxpar,
++                                    VIR_DOMAIN_LAUNCH_SECURITY_SEV_SNP_POLICY,
++                                    info.data.sev_snp.snp_policy) < 0)
++            goto endjob;
++        break;
++
+     case QEMU_MONITOR_SEV_GUEST_TYPE_LAST:
+         break;
+     }
+-- 
+2.43.0
+

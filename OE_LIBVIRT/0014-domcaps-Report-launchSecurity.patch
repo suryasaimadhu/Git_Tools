@@ -1,0 +1,141 @@
+From 20f25f50ea6866fcaacb80e0dd9948b4d720be91 Mon Sep 17 00:00:00 2001
+From: Michal Privoznik <mprivozn@redhat.com>
+Date: Tue, 25 Jun 2024 09:53:57 +0200
+Subject: [PATCH 14/15] domcaps: Report launchSecurity
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+commit d460e17282bec89dee1252db4fb3f2b7aa1b5ee8 upstream
+
+In order to learn what types of <launchSecurity/> are supported
+users can turn to domain capabilities and find <sev/> and
+<s390-pv/> elements. While these may expose some additional info
+on individual launchSecurity types, we are lacking clean
+enumeration (like we do for say device models). And given that
+SEV and SEV SNP share the same basis (info found under <sev/> is
+applicable to SEV SNP too) we have no other way to report SEV SNP
+support.
+
+Therefore, report supported launchSecurity types in domain
+capabilities.
+
+Signed-off-by: Michal Privoznik <mprivozn@redhat.com>
+Reviewed-by: Jiri Denemark <jdenemar@redhat.com>
+Reviewed-by: Daniel P. Berrangé <berrange@redhat.com>
+Signed-off-by: suryasaimadhu <saimadhu.koyyalaharivenkata@amd.com>
+---
+ docs/formatdomaincaps.rst       | 10 ++++++++++
+ src/conf/domain_capabilities.c  | 14 ++++++++++++++
+ src/conf/domain_capabilities.h  |  9 +++++++++
+ src/conf/schemas/domaincaps.rng | 10 ++++++++++
+ 4 files changed, 43 insertions(+)
+
+diff --git a/docs/formatdomaincaps.rst b/docs/formatdomaincaps.rst
+index ef752a0f3ab3..86353a6d9a48 100644
+--- a/docs/formatdomaincaps.rst
++++ b/docs/formatdomaincaps.rst
+@@ -796,3 +796,13 @@ are supported. The ``features`` enum corresponds to the ``<hyperv/>`` element
+ Please note that depending on the QEMU version some capabilities might be
+ missing even though QEMU does support them. This is because prior to QEMU-6.1.0
+ not all features were reported by QEMU.
++
++Launch security
++^^^^^^^^^^^^^^^
++
++The ``launchSecurity`` element exposes supported aspects of encrypted guests.
++The ``sectype`` enum corresponds to ``type`` attribute of ``<launchSecurity/>``
++element as documented in `Launch Security
++<formatdomain.html#launch-security>`__.  :since:`(Since 10.5.0)` For additional
++information on individual types, see sections above: `s390-pv capability`_ for
++S390 PV, `SEV capabilities`_ for AMD SEV and/or AMD SEV-SNP.
+diff --git a/src/conf/domain_capabilities.c b/src/conf/domain_capabilities.c
+index f6e09dc5848f..2c69ba0a1824 100644
+--- a/src/conf/domain_capabilities.c
++++ b/src/conf/domain_capabilities.c
+@@ -707,6 +707,19 @@ virDomainCapsFeatureHypervFormat(virBuffer *buf,
+     FORMAT_EPILOGUE(hyperv);
+ }
+ 
++
++static void
++virDomainCapsLaunchSecurityFormat(virBuffer *buf,
++                                  const virDomainCapsLaunchSecurity *launchSecurity)
++{
++    FORMAT_PROLOGUE(launchSecurity);
++
++    ENUM_PROCESS(launchSecurity, sectype, virDomainLaunchSecurityTypeToString);
++
++    FORMAT_EPILOGUE(launchSecurity);
++}
++
++
+ static void
+ virDomainCapsFormatFeatures(const virDomainCaps *caps,
+                             virBuffer *buf)
+@@ -728,6 +741,7 @@ virDomainCapsFormatFeatures(const virDomainCaps *caps,
+     virDomainCapsFeatureSEVFormat(&childBuf, caps->sev);
+     virDomainCapsFeatureSGXFormat(&childBuf, caps->sgx);
+     virDomainCapsFeatureHypervFormat(&childBuf, caps->hyperv);
++    virDomainCapsLaunchSecurityFormat(&childBuf, &caps->launchSecurity);
+ 
+     virXMLFormatElement(buf, "features", NULL, &childBuf);
+ }
+diff --git a/src/conf/domain_capabilities.h b/src/conf/domain_capabilities.h
+index 01bcfa2e395d..ef2d6debe12f 100644
+--- a/src/conf/domain_capabilities.h
++++ b/src/conf/domain_capabilities.h
+@@ -165,6 +165,14 @@ struct _virDomainCapsFeatureHyperv {
+     virDomainCapsEnum features; /* Info about supported virDomainHyperv features */
+ };
+ 
++STATIC_ASSERT_ENUM(VIR_DOMAIN_LAUNCH_SECURITY_LAST);
++typedef struct _virDomainCapsLaunchSecurity virDomainCapsLaunchSecurity;
++struct _virDomainCapsLaunchSecurity {
++    virTristateBool supported;
++    virDomainCapsEnum sectype; /* Info about supported virDomainLaunchSecurity */
++};
++
++
+ typedef enum {
+     VIR_DOMCAPS_CPU_USABLE_UNKNOWN,
+     VIR_DOMCAPS_CPU_USABLE_YES,
+@@ -284,6 +292,7 @@ struct _virDomainCaps {
+     virSEVCapability *sev;
+     virSGXCapability *sgx;
+     virDomainCapsFeatureHyperv *hyperv;
++    virDomainCapsLaunchSecurity launchSecurity;
+     /* add new domain features here */
+ 
+     virTristateBool features[VIR_DOMAIN_CAPS_FEATURE_LAST];
+diff --git a/src/conf/schemas/domaincaps.rng b/src/conf/schemas/domaincaps.rng
+index e7aa4a10660d..b8115fe0289f 100644
+--- a/src/conf/schemas/domaincaps.rng
++++ b/src/conf/schemas/domaincaps.rng
+@@ -285,6 +285,13 @@
+     </element>
+   </define>
+ 
++  <define name="launchSecurity">
++    <element name="launchSecurity">
++      <ref name="supported"/>
++      <ref name="enum"/>
++    </element>
++  </define>
++
+   <define name="features">
+     <element name="features">
+       <optional>
+@@ -317,6 +324,9 @@
+       <optional>
+         <ref name="hyperv"/>
+       </optional>
++      <optional>
++        <ref name='launchSecurity'/>
++      </optional>
+     </element>
+   </define>
+ 
+-- 
+2.43.0
+

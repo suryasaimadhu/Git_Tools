@@ -1,0 +1,720 @@
+From adf421785167538b4cb67b2ba45f3d995ad681b7 Mon Sep 17 00:00:00 2001
+From: Michal Privoznik <mprivozn@redhat.com>
+Date: Tue, 11 Jun 2024 11:58:41 +0200
+Subject: [PATCH 11/15] conf: Introduce SEV-SNP support
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+commit c65eba1f57ab1670f5bfc6bd178df1d5c3b09e2a upstream
+
+SEV-SNP is an enhancement of SEV/SEV-ES and thus it shares some
+fields with it. Nevertheless, on XML level, it's yet another type
+of <launchSecurity/>.
+
+[Backport Changes]
+
+1. The enumeration value VIR_DOMAIN_LAUNCH_SECURITY_CVM, a member of the
+virDomainLaunchSecurity enum, was introduced in Euler libvirt as part of
+CSV support in commit ddf9053ad7d. However, the recent upstream patch's
+switch statements do not account for this new enum member. This backport
+ensures that VIR_DOMAIN_LAUNCH_SECURITY_CVM is correctly handled in all
+the newly added switch statements by adding the appropriate case block in
+file src/conf/domain_validate.c. This change prevents compiler warnings
+and enhances the completeness of the code.
+
+Signed-off-by: Michal Privoznik <mprivozn@redhat.com>
+Reviewed-by: Daniel P. Berrangé <berrange@redhat.com>
+Signed-off-by: suryasaimadhu <saimadhu.koyyalaharivenkata@amd.com>
+---
+ docs/formatdomain.rst                         | 108 ++++++++++++++++++
+ src/conf/domain_conf.c                        |  73 ++++++++++++
+ src/conf/domain_conf.h                        |  15 +++
+ src/conf/domain_validate.c                    |  45 ++++++++
+ src/conf/schemas/domaincommon.rng             |  49 ++++++++
+ src/conf/virconftypes.h                       |   2 +
+ src/qemu/qemu_cgroup.c                        |   1 +
+ src/qemu/qemu_command.c                       |   4 +
+ src/qemu/qemu_driver.c                        |   1 +
+ src/qemu/qemu_firmware.c                      |   3 +
+ src/qemu/qemu_namespace.c                     |   1 +
+ src/qemu/qemu_process.c                       |   3 +
+ src/qemu/qemu_validate.c                      |   9 ++
+ src/security/security_dac.c                   |   2 +
+ ...launch-security-sev-snp.x86_64-latest.args |  34 ++++++
+ .../launch-security-sev-snp.x86_64-latest.xml |   1 +
+ .../launch-security-sev-snp.xml               |  47 ++++++++
+ tests/qemuxml2argvtest.c                      |   2 +
+ 18 files changed, 400 insertions(+)
+ create mode 100644 tests/qemuxml2argvdata/launch-security-sev-snp.x86_64-latest.args
+ create mode 120000 tests/qemuxml2argvdata/launch-security-sev-snp.x86_64-latest.xml
+ create mode 100644 tests/qemuxml2argvdata/launch-security-sev-snp.xml
+
+diff --git a/docs/formatdomain.rst b/docs/formatdomain.rst
+index 2d794cc8a21f..8812779dc246 100644
+--- a/docs/formatdomain.rst
++++ b/docs/formatdomain.rst
+@@ -8754,6 +8754,114 @@ spec <https://support.amd.com/TechDocs/55766_SEV-KM_API_Specification.pdf>`__
+    session blob defined in the SEV API spec. See SEV spec LAUNCH_START section
+    for the session blob format.
+ 
++
++Some modern AMD processors support Secure Encrypted Virtualization with Secure
++Nested Paging enhancement, also known as SEV-SNP. :since:`Since 10.5.0` To
++enable it ``<launchSecurity type='sev-snp'>`` should be used. It shares some
++attributes and elements with ``type='sev'`` but differs in others. Example configuration:
++
++::
++
++  <domain>
++    ...
++    <launchSecurity type='sev-snp' authorKey='yes' vcek='no'>
++      <cbitpos>47</cbitpos>
++      <reducedPhysBits>1</reducedPhysBits>
++      <policy>0x00030000</policy>
++      <guestVisibleWorkarounds>...</guestVisibleWorkarounds>
++      <idBlock>...</idBlock>
++      <idAuth>...</idAuth>
++      <hostData>.../hostData>
++    </launchSecurity>
++    ...
++  </domain>
++
++The ``<launchSecurity/>`` element accepts the following attributes:
++
++``kernelHashes``
++   The optional ``kernelHashes`` attribute indicates whether the
++   hashes of the kernel, ramdisk and command line should be included
++   in the measurement done by the firmware. This is only valid if
++   using direct kernel boot.
++
++``authorKey``
++   The optional ``authorKey`` attribute indicates whether ``<idAuth/>`` element
++   contains the 'AUTHOR_KEY' field defined SEV-SNP firmware ABI.
++
++``vcek``
++   The optional ``vcek`` attribute indicates whether the guest is allowed to
++   chose between VLEK (Versioned Loaded Endorsement Key) or VCEK (Versioned
++   Chip Endorsement Key)  when requesting attestation reports from firmware.
++   Set this to ``no`` to disable the use of VCEK.
++
++Aforementioned SEV-SNP firmware ABI can be found here:
++`<https://www.amd.com/system/files/TechDocs/56860.pdf>`__
++
++The ``<launchSecurity/>`` element then accepts the following child elements:
++
++``cbitpos``
++   The required ``cbitpos`` element provides the C-bit (aka encryption bit)
++   location in guest page table entry. The value of ``cbitpos`` is hypervisor
++   dependent and can be obtained through the ``sev`` element from the domain
++   capabilities.
++``reducedPhysBits``
++   The required ``reducedPhysBits`` element provides the physical address bit
++   reduction. Similar to ``cbitpos`` the value of ``reduced-phys-bit`` is
++   hypervisor dependent and can be obtained through the ``sev`` element from the
++   domain capabilities.
++``policy``
++   The required ``policy`` element provides the guest policy which must be
++   maintained by the SEV-SNP firmware. This policy is enforced by the firmware
++   and restricts what configuration and operational commands can be performed
++   on this guest by the hypervisor. The guest policy provided during guest
++   launch is bound to the guest and cannot be changed throughout the lifetime
++   of the guest. The policy is also transmitted during snapshot and migration
++   flows and enforced on the destination platform. The guest policy is a 64bit
++   unsigned number with the fields shown in table (See section `4.3 Guest
++   Policy` in aforementioned firmware ABI specification):
++
++   ====== =========================================================================================
++   Bit(s) Description
++   ====== =========================================================================================
++   63:25  Reserved. Must be zero.
++   24     Ciphertext hiding must be enabled when set, otherwise may be enabled or disabled.
++   23     Running Average Power Limit (RAPL) must be disabled when set.
++   22     Require AES 256 XTS for memory encryption when set, otherwise AES 128 XEX may be allowed.
++   21     CXL can be populated with devices or memory when set.
++   20     Guest can be activated only on one socket when set.
++   19     Debugging is allowed when set.
++   18     Association with a migration agent is allowed when set.
++   17     Reserved. Must be set.
++   16     SMT is allowed.
++   15:8   The minimum ABI major version required for this guest to run.
++   7:0    The minimum ABI minor version required for this guest to run.
++   ====== =========================================================================================
++
++   The default value is hypervisor dependant and QEMU defaults to value 0x30000
++   meaning no minimum ABI major/minor version is required and SMT is allowed.
++
++``guestVisibleWorkarounds``
++   The optional ``guestVisibleWorkarounds`` element is a 16-byte,
++   base64-encoded blob to report hypervisor-defined workarounds, corresponding
++   to the 'GOSVW' parameter of the SNP_LAUNCH_START command defined in the
++   SEV-SNP firmware ABI.
++
++``idBlock``
++   The optional ``idBlock`` element is a 96-byte, base64-encoded blob to
++   provide the 'ID Block' structure for the SNP_LAUNCH_FINISH command defined
++   in the SEV-SNP firmware ABI.
++
++``idAuth``
++   The optional ``idAuth`` element is a 4096-byte, base64-encoded blob to
++   provide the 'ID Authentication Information Structure' for the
++   SNP_LAUNCH_FINISH command defined in the SEV-SNP firmware ABI.
++
++``hostData``
++   The optional ``hostData`` element is a 32-byte, base64-encoded, user-defined
++   blob to provide to the guest, as documented for the 'HOST_DATA' parameter of
++   the SNP_LAUNCH_FINISH command in the SEV-SNP firmware ABI.
++
++
+ Example configs
+ ===============
+ 
+diff --git a/src/conf/domain_conf.c b/src/conf/domain_conf.c
+index 9c449d1ff2e0..b46ad1297bea 100644
+--- a/src/conf/domain_conf.c
++++ b/src/conf/domain_conf.c
+@@ -1515,6 +1515,7 @@ VIR_ENUM_IMPL(virDomainLaunchSecurity,
+               VIR_DOMAIN_LAUNCH_SECURITY_LAST,
+               "",
+               "sev",
++              "sev-snp",
+               "s390-pv",
+               "cvm",
+ );
+@@ -3832,6 +3833,12 @@ virDomainSecDefFree(virDomainSecDef *def)
+         g_free(def->data.sev.secret_header);
+         g_free(def->data.sev.secret);
+         break;
++    case VIR_DOMAIN_LAUNCH_SECURITY_SEV_SNP:
++        g_free(def->data.sev_snp.guest_visible_workarounds);
++        g_free(def->data.sev_snp.id_block);
++        g_free(def->data.sev_snp.id_auth);
++        g_free(def->data.sev_snp.host_data);
++        break;
+     case VIR_DOMAIN_LAUNCH_SECURITY_PV:
+     case VIR_DOMAIN_LAUNCH_SECURITY_CVM:
+     case VIR_DOMAIN_LAUNCH_SECURITY_NONE:
+@@ -13568,6 +13575,36 @@ virDomainSEVDefParseXML(virDomainSEVDef *def,
+ }
+ 
+ 
++static int
++virDomainSEVSNPDefParseXML(virDomainSEVSNPDef *def,
++                           xmlXPathContextPtr ctxt)
++{
++    if (virDomainSEVCommonDefParseXML(&def->common, ctxt) < 0)
++        return -1;
++
++    if (virXMLPropTristateBool(ctxt->node, "authorKey", VIR_XML_PROP_NONE,
++                               &def->author_key) < 0)
++        return -1;
++
++    if (virXMLPropTristateBool(ctxt->node, "vcek", VIR_XML_PROP_NONE,
++                               &def->vcek) < 0)
++        return -1;
++
++    if (virXPathULongLongBase("string(./policy)", ctxt, 16, &def->policy) < 0) {
++        virReportError(VIR_ERR_XML_ERROR, "%s",
++                       _("failed to get launch security policy"));
++        return -1;
++    }
++
++    def->guest_visible_workarounds = virXPathString("string(./guestVisibleWorkarounds)", ctxt);
++    def->id_block = virXPathString("string(./idBlock)", ctxt);
++    def->id_auth = virXPathString("string(./idAuth)", ctxt);
++    def->host_data = virXPathString("string(./hostData)", ctxt);
++
++    return 0;
++}
++
++
+ static virDomainSecDef *
+ virDomainSecDefParseXML(xmlNodePtr lsecNode,
+                         xmlXPathContextPtr ctxt)
+@@ -13587,6 +13624,10 @@ virDomainSecDefParseXML(xmlNodePtr lsecNode,
+         if (virDomainSEVDefParseXML(&sec->data.sev, ctxt) < 0)
+             return NULL;
+         break;
++    case VIR_DOMAIN_LAUNCH_SECURITY_SEV_SNP:
++        if (virDomainSEVSNPDefParseXML(&sec->data.sev_snp, ctxt) < 0)
++            return NULL;
++        break;
+     case VIR_DOMAIN_LAUNCH_SECURITY_PV:
+     case VIR_DOMAIN_LAUNCH_SECURITY_CVM:
+         break;
+@@ -26622,6 +26663,34 @@ virDomainSEVDefFormat(virBuffer *attrBuf,
+ }
+ 
+ 
++static void
++virDomainSEVSNPDefFormat(virBuffer *attrBuf,
++                         virBuffer *childBuf,
++                         virDomainSEVSNPDef *def)
++{
++    virDomainSEVCommonDefFormat(attrBuf, childBuf, &def->common);
++
++    if (def->author_key != VIR_TRISTATE_BOOL_ABSENT) {
++        virBufferAsprintf(attrBuf, " authorKey='%s'",
++                          virTristateBoolTypeToString(def->author_key));
++    }
++
++    if (def->vcek != VIR_TRISTATE_BOOL_ABSENT) {
++        virBufferAsprintf(attrBuf, " vcek='%s'",
++                          virTristateBoolTypeToString(def->vcek));
++    }
++
++    virBufferAsprintf(childBuf, "<policy>0x%08llx</policy>\n", def->policy);
++
++    virBufferEscapeString(childBuf,
++                          "<guestVisibleWorkarounds>%s</guestVisibleWorkarounds>\n",
++                          def->guest_visible_workarounds);
++    virBufferEscapeString(childBuf, "<idBlock>%s</idBlock>\n", def->id_block);
++    virBufferEscapeString(childBuf, "<idAuth>%s</idAuth>\n", def->id_auth);
++    virBufferEscapeString(childBuf, "<hostData>%s</hostData>\n", def->host_data);
++}
++
++
+ static void
+ virDomainSecDefFormat(virBuffer *buf, virDomainSecDef *sec)
+ {
+@@ -26639,6 +26708,10 @@ virDomainSecDefFormat(virBuffer *buf, virDomainSecDef *sec)
+         virDomainSEVDefFormat(&attrBuf, &childBuf, &sec->data.sev);
+         break;
+ 
++    case VIR_DOMAIN_LAUNCH_SECURITY_SEV_SNP:
++        virDomainSEVSNPDefFormat(&attrBuf, &childBuf, &sec->data.sev_snp);
++        break;
++
+     case VIR_DOMAIN_LAUNCH_SECURITY_PV:
+     case VIR_DOMAIN_LAUNCH_SECURITY_CVM:
+         break;
+diff --git a/src/conf/domain_conf.h b/src/conf/domain_conf.h
+index 90ccdeaf815f..8072f6730919 100644
+--- a/src/conf/domain_conf.h
++++ b/src/conf/domain_conf.h
+@@ -2857,6 +2857,7 @@ struct _virDomainKeyWrapDef {
+ typedef enum {
+     VIR_DOMAIN_LAUNCH_SECURITY_NONE,
+     VIR_DOMAIN_LAUNCH_SECURITY_SEV,
++    VIR_DOMAIN_LAUNCH_SECURITY_SEV_SNP,
+     VIR_DOMAIN_LAUNCH_SECURITY_PV,
+     VIR_DOMAIN_LAUNCH_SECURITY_CVM,
+ 
+@@ -2883,10 +2884,24 @@ struct _virDomainSEVDef {
+     char *secret;
+ };
+ 
++
++struct _virDomainSEVSNPDef {
++    virDomainSEVCommonDef common;
++    unsigned long long policy;
++    char *guest_visible_workarounds;
++    char *id_block;
++    char *id_auth;
++    char *host_data;
++    virTristateBool author_key;
++    virTristateBool vcek;
++};
++
++
+ struct _virDomainSecDef {
+     virDomainLaunchSecurity sectype;
+     union {
+         virDomainSEVDef sev;
++        virDomainSEVSNPDef sev_snp;
+     } data;
+ };
+ 
+diff --git a/src/conf/domain_validate.c b/src/conf/domain_validate.c
+index d88ef6b91528..9c14864ff3ac 100644
+--- a/src/conf/domain_validate.c
++++ b/src/conf/domain_validate.c
+@@ -1787,6 +1787,48 @@ virDomainDefValidateIOThreads(const virDomainDef *def)
+ }
+ 
+ 
++#define CHECK_BASE64_LEN(val, elemName, exp_len) \
++{ \
++    size_t len; \
++    g_autofree unsigned char *tmp = NULL; \
++    if (val && (tmp = g_base64_decode(val, &len)) && len != exp_len) { \
++        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, \
++                       _("Unexpected length of '%1$s', expected %2$u got %3$zu"), \
++                        elemName, exp_len, len); \
++        return -1; \
++    } \
++}
++
++static int
++virDomainDefLaunchSecurityValidate(const virDomainDef *def)
++{
++    virDomainSEVSNPDef *sev_snp;
++
++    if (!def->sec)
++        return 0;
++
++    switch (def->sec->sectype) {
++    case VIR_DOMAIN_LAUNCH_SECURITY_SEV_SNP:
++        sev_snp = &def->sec->data.sev_snp;
++
++        CHECK_BASE64_LEN(sev_snp->guest_visible_workarounds, "guestVisibleWorkarounds", 16);
++        CHECK_BASE64_LEN(sev_snp->id_block, "idBlock", 96);
++        CHECK_BASE64_LEN(sev_snp->id_auth, "idAuth", 4096);
++        CHECK_BASE64_LEN(sev_snp->host_data, "hostData", 32);
++        break;
++
++    case VIR_DOMAIN_LAUNCH_SECURITY_NONE:
++    case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
++    case VIR_DOMAIN_LAUNCH_SECURITY_PV:
++    case VIR_DOMAIN_LAUNCH_SECURITY_CVM:
++    case VIR_DOMAIN_LAUNCH_SECURITY_LAST:
++    }
++
++    return 0;
++}
++
++#undef CHECK_BASE64_LEN
++
+ static int
+ virDomainDefValidateInternal(const virDomainDef *def,
+                              virDomainXMLOption *xmlopt)
+@@ -1842,6 +1884,9 @@ virDomainDefValidateInternal(const virDomainDef *def,
+     if (virDomainDefValidateIOThreads(def) < 0)
+         return -1;
+ 
++    if (virDomainDefLaunchSecurityValidate(def) < 0)
++        return -1;
++
+     return 0;
+ }
+ 
+diff --git a/src/conf/schemas/domaincommon.rng b/src/conf/schemas/domaincommon.rng
+index 966e5831f41d..44420d2c62da 100644
+--- a/src/conf/schemas/domaincommon.rng
++++ b/src/conf/schemas/domaincommon.rng
+@@ -515,6 +515,9 @@
+         <group>
+           <ref name="launchSecuritySEV"/>
+         </group>
++        <group>
++          <ref name="launchSecuritySEVSNP"/>
++        </group>
+         <group>
+           <attribute name="type">
+             <value>s390-pv</value>
+@@ -578,6 +581,52 @@
+     </attribute>
+   </define>
+ 
++  <define name="launchSecuritySEVSNP">
++    <attribute name="type">
++      <value>sev-snp</value>
++    </attribute>
++    <optional>
++      <attribute name="kernelHashes">
++        <ref name="virYesNo"/>
++      </attribute>
++    </optional>
++    <optional>
++      <attribute name="authorKey">
++        <ref name="virYesNo"/>
++      </attribute>
++    </optional>
++    <optional>
++      <attribute name="vcek">
++        <ref name="virYesNo"/>
++      </attribute>
++    </optional>
++    <interleave>
++      <ref name="launchSecuritySEVCommon"/>
++      <element name="policy">
++        <ref name="hexuint"/>
++      </element>
++      <optional>
++        <element name="guestVisibleWorkarounds">
++          <data type="string"/>
++        </element>
++      </optional>
++      <optional>
++        <element name="idBlock">
++          <data type="string"/>
++        </element>
++      </optional>
++      <optional>
++        <element name="idAuth">
++          <data type="string"/>
++        </element>
++      </optional>
++      <optional>
++        <element name="hostData">
++          <data type="string"/>
++        </element>
++      </optional>
++    </interleave>
++  </define>
+   <!--
+       Enable or disable perf events for the domain. For each
+       of the events the following rules apply:
+diff --git a/src/conf/virconftypes.h b/src/conf/virconftypes.h
+index d175e548983e..95678730de61 100644
+--- a/src/conf/virconftypes.h
++++ b/src/conf/virconftypes.h
+@@ -214,6 +214,8 @@ typedef struct _virDomainSEVCommonDef virDomainSEVCommonDef;
+ 
+ typedef struct _virDomainSEVDef virDomainSEVDef;
+ 
++typedef struct _virDomainSEVSNPDef virDomainSEVSNPDef;
++
+ typedef struct _virDomainSecDef virDomainSecDef;
+ 
+ typedef struct _virDomainShmemDef virDomainShmemDef;
+diff --git a/src/qemu/qemu_cgroup.c b/src/qemu/qemu_cgroup.c
+index 1280989a0170..c37af6c84450 100644
+--- a/src/qemu/qemu_cgroup.c
++++ b/src/qemu/qemu_cgroup.c
+@@ -847,6 +847,7 @@ qemuSetupDevicesCgroup(virDomainObj *vm)
+     if (vm->def->sec) {
+         switch (vm->def->sec->sectype) {
+         case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
++        case VIR_DOMAIN_LAUNCH_SECURITY_SEV_SNP:
+             if (qemuSetupSEVCgroup(vm) < 0)
+                 return -1;
+             break;
+diff --git a/src/qemu/qemu_command.c b/src/qemu/qemu_command.c
+index 473f48b778f7..3f65e7c6123b 100644
+--- a/src/qemu/qemu_command.c
++++ b/src/qemu/qemu_command.c
+@@ -7039,6 +7039,8 @@ qemuBuildMachineCommandLine(virCommand *cmd,
+                 virBufferAddLit(&buf, ",memory-encryption=lsec0");
+             }
+             break;
++        case VIR_DOMAIN_LAUNCH_SECURITY_SEV_SNP:
++            break;
+         case VIR_DOMAIN_LAUNCH_SECURITY_PV:
+             virBufferAddLit(&buf, ",confidential-guest-support=lsec0");
+             break;
+@@ -9790,6 +9792,8 @@ qemuBuildSecCommandLine(virDomainObj *vm, virCommand *cmd,
+     case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
+         return qemuBuildSEVCommandLine(vm, cmd, &sec->data.sev);
+         break;
++    case VIR_DOMAIN_LAUNCH_SECURITY_SEV_SNP:
++        break;
+     case VIR_DOMAIN_LAUNCH_SECURITY_PV:
+         return qemuBuildPVCommandLine(vm, cmd);
+         break;
+diff --git a/src/qemu/qemu_driver.c b/src/qemu/qemu_driver.c
+index e79649e676b0..6d273d6c4115 100644
+--- a/src/qemu/qemu_driver.c
++++ b/src/qemu/qemu_driver.c
+@@ -19122,6 +19122,7 @@ qemuDomainGetLaunchSecurityInfo(virDomainPtr domain,
+ 
+     switch (vm->def->sec->sectype) {
+     case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
++    case VIR_DOMAIN_LAUNCH_SECURITY_SEV_SNP:
+         if (qemuDomainGetSEVInfo(vm, params, nparams, flags) < 0)
+             goto cleanup;
+         break;
+diff --git a/src/qemu/qemu_firmware.c b/src/qemu/qemu_firmware.c
+index 8ee16daf8d49..0a82fc4c97b9 100644
+--- a/src/qemu/qemu_firmware.c
++++ b/src/qemu/qemu_firmware.c
+@@ -1373,6 +1373,9 @@ qemuFirmwareMatchDomain(const virDomainDef *def,
+                 return false;
+             }
+             break;
++
++        case VIR_DOMAIN_LAUNCH_SECURITY_SEV_SNP:
++            break;
+         case VIR_DOMAIN_LAUNCH_SECURITY_PV:
+         case VIR_DOMAIN_LAUNCH_SECURITY_CVM:
+             break;
+diff --git a/src/qemu/qemu_namespace.c b/src/qemu/qemu_namespace.c
+index 821e0594802d..ae5c2dd0bbcc 100644
+--- a/src/qemu/qemu_namespace.c
++++ b/src/qemu/qemu_namespace.c
+@@ -653,6 +653,7 @@ qemuDomainSetupLaunchSecurity(virDomainObj *vm,
+ 
+     switch (sec->sectype) {
+     case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
++    case VIR_DOMAIN_LAUNCH_SECURITY_SEV_SNP:
+         VIR_DEBUG("Setting up launch security for SEV");
+ 
+         *paths = g_slist_prepend(*paths, g_strdup(QEMU_DEV_SEV));
+diff --git a/src/qemu/qemu_process.c b/src/qemu/qemu_process.c
+index b25edebd68e7..2f6365c3c734 100644
+--- a/src/qemu/qemu_process.c
++++ b/src/qemu/qemu_process.c
+@@ -6980,6 +6980,7 @@ qemuProcessPrepareDomain(virQEMUDriver *driver,
+     if (vm->def->sec) {
+         switch (vm->def->sec->sectype) {
+         case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
++        case VIR_DOMAIN_LAUNCH_SECURITY_SEV_SNP:
+             VIR_DEBUG("Updating SEV platform info");
+             if (qemuProcessUpdateSEVInfo(vm) < 0)
+                 return -1;
+@@ -7065,6 +7066,8 @@ qemuProcessPrepareLaunchSecurityGuestInput(virDomainObj *vm)
+     switch (sec->sectype) {
+     case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
+         return qemuProcessPrepareSEVGuestInput(vm);
++    case VIR_DOMAIN_LAUNCH_SECURITY_SEV_SNP:
++        break;
+     case VIR_DOMAIN_LAUNCH_SECURITY_PV:
+     case VIR_DOMAIN_LAUNCH_SECURITY_CVM:
+         return 0;
+diff --git a/src/qemu/qemu_validate.c b/src/qemu/qemu_validate.c
+index 33f0994d141e..515551ce89a2 100644
+--- a/src/qemu/qemu_validate.c
++++ b/src/qemu/qemu_validate.c
+@@ -1312,6 +1312,15 @@ qemuValidateDomainDef(const virDomainDef *def,
+                 return -1;
+             }
+             break;
++
++        case VIR_DOMAIN_LAUNCH_SECURITY_SEV_SNP:
++            if (!virQEMUCapsGet(qemuCaps, QEMU_CAPS_SEV_SNP_GUEST)) {
++                virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
++                               _("SEV SNP launch security is not supported with this QEMU binary"));
++                return -1;
++            }
++            break;
++
+         case VIR_DOMAIN_LAUNCH_SECURITY_PV:
+             if (!virQEMUCapsGet(qemuCaps, QEMU_CAPS_MACHINE_CONFIDENTAL_GUEST_SUPPORT) ||
+                 !virQEMUCapsGet(qemuCaps, QEMU_CAPS_S390_PV_GUEST)) {
+diff --git a/src/security/security_dac.c b/src/security/security_dac.c
+index 4be9174704ea..e964939323c6 100644
+--- a/src/security/security_dac.c
++++ b/src/security/security_dac.c
+@@ -1980,6 +1980,7 @@ virSecurityDACRestoreAllLabel(virSecurityManager *mgr,
+     if (def->sec) {
+         switch (def->sec->sectype) {
+         case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
++        case VIR_DOMAIN_LAUNCH_SECURITY_SEV_SNP:
+             if (virSecurityDACRestoreSEVLabel(mgr, def) < 0)
+                 rc = -1;
+             break;
+@@ -2214,6 +2215,7 @@ virSecurityDACSetAllLabel(virSecurityManager *mgr,
+     if (def->sec) {
+         switch (def->sec->sectype) {
+         case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
++        case VIR_DOMAIN_LAUNCH_SECURITY_SEV_SNP:
+             if (virSecurityDACSetSEVLabel(mgr, def) < 0)
+                 return -1;
+             break;
+diff --git a/tests/qemuxml2argvdata/launch-security-sev-snp.x86_64-latest.args b/tests/qemuxml2argvdata/launch-security-sev-snp.x86_64-latest.args
+new file mode 100644
+index 000000000000..37ac58edb8d4
+--- /dev/null
++++ b/tests/qemuxml2argvdata/launch-security-sev-snp.x86_64-latest.args
+@@ -0,0 +1,34 @@
++LC_ALL=C \
++PATH=/bin \
++HOME=/var/lib/libvirt/qemu/domain--1-QEMUGuest1 \
++USER=test \
++LOGNAME=test \
++XDG_DATA_HOME=/var/lib/libvirt/qemu/domain--1-QEMUGuest1/.local/share \
++XDG_CACHE_HOME=/var/lib/libvirt/qemu/domain--1-QEMUGuest1/.cache \
++XDG_CONFIG_HOME=/var/lib/libvirt/qemu/domain--1-QEMUGuest1/.config \
++/usr/bin/qemu-system-x86_64 \
++-name guest=QEMUGuest1,debug-threads=on \
++-S \
++-object '{"qom-type":"secret","id":"masterKey0","format":"raw","file":"/var/lib/libvirt/qemu/domain--1-QEMUGuest1/master-key.aes"}' \
++-machine pc,usb=off,dump-guest-core=off,memory-backend=pc.ram,acpi=off \
++-accel kvm \
++-cpu qemu64 \
++-m size=219136k \
++-object '{"qom-type":"memory-backend-ram","id":"pc.ram","size":224395264}' \
++-overcommit mem-lock=off \
++-smp 1,sockets=1,cores=1,threads=1 \
++-uuid c7a5fdbd-edaf-9455-926a-d65c16db1809 \
++-display none \
++-no-user-config \
++-nodefaults \
++-chardev socket,id=charmonitor,fd=1729,server=on,wait=off \
++-mon chardev=charmonitor,id=monitor,mode=control \
++-rtc base=utc \
++-no-shutdown \
++-boot strict=on \
++-device '{"driver":"piix3-usb-uhci","id":"usb","bus":"pci.0","addr":"0x1.0x2"}' \
++-blockdev '{"driver":"host_device","filename":"/dev/HostVG/QEMUGuest1","node-name":"libvirt-1-storage","read-only":false}' \
++-device '{"driver":"ide-hd","bus":"ide.0","unit":0,"drive":"libvirt-1-storage","id":"ide0-0-0","bootindex":1}' \
++-audiodev '{"id":"audio1","driver":"none"}' \
++-sandbox on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny \
++-msg timestamp=on
+diff --git a/tests/qemuxml2argvdata/launch-security-sev-snp.x86_64-latest.xml b/tests/qemuxml2argvdata/launch-security-sev-snp.x86_64-latest.xml
+new file mode 120000
+index 000000000000..0159cc057be2
+--- /dev/null
++++ b/tests/qemuxml2argvdata/launch-security-sev-snp.x86_64-latest.xml
+@@ -0,0 +1 @@
++launch-security-sev-snp.xml
+\ No newline at end of file
+diff --git a/tests/qemuxml2argvdata/launch-security-sev-snp.xml b/tests/qemuxml2argvdata/launch-security-sev-snp.xml
+new file mode 100644
+index 000000000000..b277d7de1bd2
+--- /dev/null
++++ b/tests/qemuxml2argvdata/launch-security-sev-snp.xml
+@@ -0,0 +1,47 @@
++<domain type='kvm'>
++  <name>QEMUGuest1</name>
++  <uuid>c7a5fdbd-edaf-9455-926a-d65c16db1809</uuid>
++  <memory unit='KiB'>219100</memory>
++  <currentMemory unit='KiB'>219100</currentMemory>
++  <vcpu placement='static'>1</vcpu>
++  <os>
++    <type arch='x86_64' machine='pc'>hvm</type>
++    <boot dev='hd'/>
++  </os>
++  <cpu mode='custom' match='exact' check='none'>
++    <model fallback='forbid'>qemu64</model>
++  </cpu>
++  <clock offset='utc'/>
++  <on_poweroff>destroy</on_poweroff>
++  <on_reboot>restart</on_reboot>
++  <on_crash>destroy</on_crash>
++  <devices>
++    <emulator>/usr/bin/qemu-system-x86_64</emulator>
++    <disk type='block' device='disk'>
++      <driver name='qemu' type='raw'/>
++      <source dev='/dev/HostVG/QEMUGuest1'/>
++      <target dev='hda' bus='ide'/>
++      <address type='drive' controller='0' bus='0' target='0' unit='0'/>
++    </disk>
++    <controller type='usb' index='0' model='piix3-uhci'>
++      <address type='pci' domain='0x0000' bus='0x00' slot='0x01' function='0x2'/>
++    </controller>
++    <controller type='ide' index='0'>
++      <address type='pci' domain='0x0000' bus='0x00' slot='0x01' function='0x1'/>
++    </controller>
++    <controller type='pci' index='0' model='pci-root'/>
++    <input type='mouse' bus='ps2'/>
++    <input type='keyboard' bus='ps2'/>
++    <audio id='1' type='none'/>
++    <memballoon model='none'/>
++  </devices>
++  <launchSecurity type='sev-snp' authorKey='yes' vcek='no'>
++    <cbitpos>47</cbitpos>
++    <reducedPhysBits>1</reducedPhysBits>
++    <policy>0x00030000</policy>
++    <guestVisibleWorkarounds>bGlidmlydGxpYnZpcnRsaQ==</guestVisibleWorkarounds>
++    <idBlock>bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZp</idBlock>
++    <idAuth>bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnZpcnRsaWJ2aXJ0bA==</idAuth>
++    <hostData>bGlidmlydGxpYnZpcnRsaWJ2aXJ0bGlidmlydGxpYnY=</hostData>
++  </launchSecurity>
++</domain>
+diff --git a/tests/qemuxml2argvtest.c b/tests/qemuxml2argvtest.c
+index b2ea2191dca6..8df6ccb07f1a 100644
+--- a/tests/qemuxml2argvtest.c
++++ b/tests/qemuxml2argvtest.c
+@@ -2325,6 +2325,8 @@ mymain(void)
+                                   QEMU_CAPS_SEV_GUEST,
+                                   QEMU_CAPS_LAST);
+ 
++    DO_TEST_CAPS_ARCH_LATEST("launch-security-sev-snp", "x86_64");
++
+     DO_TEST_CAPS_ARCH_LATEST("launch-security-s390-pv", "s390x");
+ 
+     DO_TEST_CAPS_LATEST("vhost-user-fs-fd-memory");
+-- 
+2.43.0
+

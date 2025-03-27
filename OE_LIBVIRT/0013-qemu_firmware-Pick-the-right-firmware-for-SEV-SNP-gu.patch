@@ -1,0 +1,114 @@
+From adbd9e1b54273801ed3216b4c4cda118e01e36b3 Mon Sep 17 00:00:00 2001
+From: Michal Privoznik <mprivozn@redhat.com>
+Date: Thu, 13 Jun 2024 14:35:57 +0200
+Subject: [PATCH 13/15] qemu_firmware: Pick the right firmware for SEV-SNP
+ guests
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+commit 58b5219961485fd2ff02343dfb17c9f1ced96bc1 upstream
+
+The firmware descriptors have 'amd-sev-snp` feature which
+describes whether firmware is suitable for SEV-SNP guests.
+Provide necessary implementation to detect the feature and pick
+the right firmware if guest is SEV-SNP enabled.
+
+Signed-off-by: Michal Privoznik <mprivozn@redhat.com>
+Reviewed-by: Daniel P. Berrangé <berrange@redhat.com>
+Signed-off-by: suryasaimadhu <saimadhu.koyyalaharivenkata@amd.com>
+---
+ src/qemu/qemu_firmware.c                          | 15 +++++++++++++++
+ .../qemu/firmware/60-edk2-ovmf-x64-amdsev.json    |  1 +
+ 2 files changed, 16 insertions(+)
+
+diff --git a/src/qemu/qemu_firmware.c b/src/qemu/qemu_firmware.c
+index 0a82fc4c97b9..ec663fd36ca0 100644
+--- a/src/qemu/qemu_firmware.c
++++ b/src/qemu/qemu_firmware.c
+@@ -148,6 +148,7 @@ typedef enum {
+     QEMU_FIRMWARE_FEATURE_ACPI_S4,
+     QEMU_FIRMWARE_FEATURE_AMD_SEV,
+     QEMU_FIRMWARE_FEATURE_AMD_SEV_ES,
++    QEMU_FIRMWARE_FEATURE_AMD_SEV_SNP,
+     QEMU_FIRMWARE_FEATURE_ENROLLED_KEYS,
+     QEMU_FIRMWARE_FEATURE_REQUIRES_SMM,
+     QEMU_FIRMWARE_FEATURE_SECURE_BOOT,
+@@ -165,6 +166,7 @@ VIR_ENUM_IMPL(qemuFirmwareFeature,
+               "acpi-s4",
+               "amd-sev",
+               "amd-sev-es",
++              "amd-sev-snp",
+               "enrolled-keys",
+               "requires-smm",
+               "secure-boot",
+@@ -1183,6 +1185,7 @@ qemuFirmwareMatchDomain(const virDomainDef *def,
+     bool requiresSMM = false;
+     bool supportsSEV = false;
+     bool supportsSEVES = false;
++    bool supportsSEVSNP = false;
+     bool supportsSecureBoot = false;
+     bool hasEnrolledKeys = false;
+     int reqSecureBoot;
+@@ -1230,6 +1233,10 @@ qemuFirmwareMatchDomain(const virDomainDef *def,
+             supportsSEVES = true;
+             break;
+ 
++        case QEMU_FIRMWARE_FEATURE_AMD_SEV_SNP:
++            supportsSEVSNP = true;
++            break;
++
+         case QEMU_FIRMWARE_FEATURE_REQUIRES_SMM:
+             requiresSMM = true;
+             break;
+@@ -1375,6 +1382,11 @@ qemuFirmwareMatchDomain(const virDomainDef *def,
+             break;
+ 
+         case VIR_DOMAIN_LAUNCH_SECURITY_SEV_SNP:
++            if (!supportsSEVSNP) {
++                VIR_DEBUG("Domain requires SEV-SNP firmware '%s' doesn't support it",
++                          path);
++                return false;
++            }
+             break;
+         case VIR_DOMAIN_LAUNCH_SECURITY_PV:
+         case VIR_DOMAIN_LAUNCH_SECURITY_CVM:
+@@ -1487,6 +1499,7 @@ qemuFirmwareEnableFeaturesModern(virDomainDef *def,
+         case QEMU_FIRMWARE_FEATURE_ACPI_S4:
+         case QEMU_FIRMWARE_FEATURE_AMD_SEV:
+         case QEMU_FIRMWARE_FEATURE_AMD_SEV_ES:
++        case QEMU_FIRMWARE_FEATURE_AMD_SEV_SNP:
+         case QEMU_FIRMWARE_FEATURE_VERBOSE_DYNAMIC:
+         case QEMU_FIRMWARE_FEATURE_VERBOSE_STATIC:
+         case QEMU_FIRMWARE_FEATURE_NONE:
+@@ -1537,6 +1550,7 @@ qemuFirmwareSanityCheck(const qemuFirmware *fw,
+         case QEMU_FIRMWARE_FEATURE_ACPI_S4:
+         case QEMU_FIRMWARE_FEATURE_AMD_SEV:
+         case QEMU_FIRMWARE_FEATURE_AMD_SEV_ES:
++        case QEMU_FIRMWARE_FEATURE_AMD_SEV_SNP:
+         case QEMU_FIRMWARE_FEATURE_VERBOSE_DYNAMIC:
+         case QEMU_FIRMWARE_FEATURE_VERBOSE_STATIC:
+         case QEMU_FIRMWARE_FEATURE_LAST:
+@@ -1966,6 +1980,7 @@ qemuFirmwareGetSupported(const char *machine,
+             case QEMU_FIRMWARE_FEATURE_ACPI_S4:
+             case QEMU_FIRMWARE_FEATURE_AMD_SEV:
+             case QEMU_FIRMWARE_FEATURE_AMD_SEV_ES:
++            case QEMU_FIRMWARE_FEATURE_AMD_SEV_SNP:
+             case QEMU_FIRMWARE_FEATURE_ENROLLED_KEYS:
+             case QEMU_FIRMWARE_FEATURE_SECURE_BOOT:
+             case QEMU_FIRMWARE_FEATURE_VERBOSE_DYNAMIC:
+diff --git a/tests/qemufirmwaredata/out/usr/share/qemu/firmware/60-edk2-ovmf-x64-amdsev.json b/tests/qemufirmwaredata/out/usr/share/qemu/firmware/60-edk2-ovmf-x64-amdsev.json
+index 2d3b821acbb6..d83d394ba77f 100644
+--- a/tests/qemufirmwaredata/out/usr/share/qemu/firmware/60-edk2-ovmf-x64-amdsev.json
++++ b/tests/qemufirmwaredata/out/usr/share/qemu/firmware/60-edk2-ovmf-x64-amdsev.json
+@@ -21,6 +21,7 @@
+     "features": [
+         "amd-sev",
+         "amd-sev-es",
++        "amd-sev-snp",
+         "verbose-dynamic"
+     ]
+ }
+-- 
+2.43.0
+

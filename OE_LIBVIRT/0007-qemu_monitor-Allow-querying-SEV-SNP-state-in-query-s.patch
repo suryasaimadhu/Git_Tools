@@ -1,0 +1,379 @@
+From 8d025b6eeb54ea166d7d26e3d24495baa1fa4ac8 Mon Sep 17 00:00:00 2001
+From: Michal Privoznik <mprivozn@redhat.com>
+Date: Mon, 10 Jun 2024 16:17:26 +0200
+Subject: [PATCH 07/15] qemu_monitor: Allow querying SEV-SNP state in
+ 'query-sev'
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+commit 914b986275718b404ef5f700a7da58d5e1172c93 upstream
+
+In QEMU commit v9.0.0-1155-g59d3740cb4 the return type of
+'query-sev' monitor command changed to accommodate SEV-SNP. Even
+though we currently support launching plain SNP guests, this will
+soon change.
+
+Signed-off-by: Michal Privoznik <mprivozn@redhat.com>
+Reviewed-by: Daniel P. Berrangé <berrange@redhat.com>
+Signed-off-by: suryasaimadhu <saimadhu.koyyalaharivenkata@amd.com>
+---
+ src/qemu/qemu_driver.c       | 32 ++++++++++--------
+ src/qemu/qemu_monitor.c      |  7 ++--
+ src/qemu/qemu_monitor.h      | 41 +++++++++++++++++++----
+ src/qemu/qemu_monitor_json.c | 63 ++++++++++++++++++++++++++++------
+ src/qemu/qemu_monitor_json.h |  8 ++---
+ tests/qemumonitorjsontest.c  | 65 ++++++++++++++++++++++++++++++++----
+ 6 files changed, 167 insertions(+), 49 deletions(-)
+
+diff --git a/src/qemu/qemu_driver.c b/src/qemu/qemu_driver.c
+index 1aab51dea82d..5e295e1df328 100644
+--- a/src/qemu/qemu_driver.c
++++ b/src/qemu/qemu_driver.c
+@@ -19030,10 +19030,7 @@ qemuDomainGetSEVInfo(virDomainObj *vm,
+     int ret = -1;
+     int rv;
+     g_autofree char *tmp = NULL;
+-    unsigned int apiMajor = 0;
+-    unsigned int apiMinor = 0;
+-    unsigned int buildID = 0;
+-    unsigned int policy = 0;
++    qemuMonitorSEVInfo info = { };
+     int maxpar = 0;
+ 
+     virCheckFlags(VIR_TYPED_PARAM_STRING_OKAY, -1);
+@@ -19048,14 +19045,12 @@ qemuDomainGetSEVInfo(virDomainObj *vm,
+     qemuDomainObjEnterMonitor(vm);
+     tmp = qemuMonitorGetSEVMeasurement(QEMU_DOMAIN_PRIVATE(vm)->mon);
+ 
+-
+     if (!tmp) {
+         qemuDomainObjExitMonitor(vm);
+         goto endjob;
+     }
+ 
+-    rv = qemuMonitorGetSEVInfo(QEMU_DOMAIN_PRIVATE(vm)->mon,
+-                               &apiMajor, &apiMinor, &buildID, &policy);
++    rv = qemuMonitorGetSEVInfo(QEMU_DOMAIN_PRIVATE(vm)->mon, &info);
+     qemuDomainObjExitMonitor(vm);
+ 
+     if (rv < 0)
+@@ -19067,21 +19062,30 @@ qemuDomainGetSEVInfo(virDomainObj *vm,
+         goto endjob;
+     if (virTypedParamsAddUInt(params, nparams, &maxpar,
+                               VIR_DOMAIN_LAUNCH_SECURITY_SEV_API_MAJOR,
+-                              apiMajor) < 0)
++                              info.apiMajor) < 0)
+         goto endjob;
+     if (virTypedParamsAddUInt(params, nparams, &maxpar,
+                               VIR_DOMAIN_LAUNCH_SECURITY_SEV_API_MINOR,
+-                              apiMinor) < 0)
++                              info.apiMinor) < 0)
+         goto endjob;
+     if (virTypedParamsAddUInt(params, nparams, &maxpar,
+                               VIR_DOMAIN_LAUNCH_SECURITY_SEV_BUILD_ID,
+-                              buildID) < 0)
+-        goto endjob;
+-    if (virTypedParamsAddUInt(params, nparams, &maxpar,
+-                              VIR_DOMAIN_LAUNCH_SECURITY_SEV_POLICY,
+-                              policy) < 0)
++                              info.buildID) < 0)
+         goto endjob;
+ 
++    switch (info.type) {
++    case QEMU_MONITOR_SEV_GUEST_TYPE_SEV:
++        if (virTypedParamsAddUInt(params, nparams, &maxpar,
++                                  VIR_DOMAIN_LAUNCH_SECURITY_SEV_POLICY,
++                                  info.data.sev.policy) < 0)
++            goto endjob;
++        break;
++
++    case QEMU_MONITOR_SEV_GUEST_TYPE_SEV_SNP:
++    case QEMU_MONITOR_SEV_GUEST_TYPE_LAST:
++        break;
++    }
++
+     ret = 0;
+ 
+  endjob:
+diff --git a/src/qemu/qemu_monitor.c b/src/qemu/qemu_monitor.c
+index e270bee2cd50..7abb88624793 100644
+--- a/src/qemu/qemu_monitor.c
++++ b/src/qemu/qemu_monitor.c
+@@ -4071,14 +4071,11 @@ qemuMonitorGetSEVMeasurement(qemuMonitor *mon)
+ 
+ int
+ qemuMonitorGetSEVInfo(qemuMonitor *mon,
+-                      unsigned int *apiMajor,
+-                      unsigned int *apiMinor,
+-                      unsigned int *buildID,
+-                      unsigned int *policy)
++                      qemuMonitorSEVInfo *info)
+ {
+     QEMU_CHECK_MONITOR(mon);
+ 
+-    return qemuMonitorJSONGetSEVInfo(mon, apiMajor, apiMinor, buildID, policy);
++    return qemuMonitorJSONGetSEVInfo(mon, info);
+ }
+ 
+ 
+diff --git a/src/qemu/qemu_monitor.h b/src/qemu/qemu_monitor.h
+index 4cbd225e8f32..883a7060c74d 100644
+--- a/src/qemu/qemu_monitor.h
++++ b/src/qemu/qemu_monitor.h
+@@ -1348,14 +1348,43 @@ int qemuMonitorBlockdevMediumInsert(qemuMonitor *mon,
+ char *
+ qemuMonitorGetSEVMeasurement(qemuMonitor *mon);
+ 
++typedef struct _qemuMonitorSEVGuestInfo qemuMonitorSEVGuestInfo;
++struct _qemuMonitorSEVGuestInfo {
++    unsigned int policy;
++    unsigned int handle;
++};
++
++typedef struct _qemuMonitorSEVSNPGuestInfo qemuMonitorSEVSNPGuestInfo;
++struct _qemuMonitorSEVSNPGuestInfo {
++    unsigned long long snp_policy;
++};
++
++
++typedef enum {
++    QEMU_MONITOR_SEV_GUEST_TYPE_SEV,
++    QEMU_MONITOR_SEV_GUEST_TYPE_SEV_SNP,
++
++    QEMU_MONITOR_SEV_GUEST_TYPE_LAST
++} qemuMonitorSEVGuestType;
++
++VIR_ENUM_DECL(qemuMonitorSEVGuest);
++
++typedef struct _qemuMonitorSEVInfo qemuMonitorSEVInfo;
++struct _qemuMonitorSEVInfo {
++    unsigned int apiMajor;
++    unsigned int apiMinor;
++    unsigned int buildID;
++    qemuMonitorSEVGuestType type;
++    union {
++        qemuMonitorSEVGuestInfo sev;
++        qemuMonitorSEVSNPGuestInfo sev_snp;
++    } data;
++};
++
+ int
+ qemuMonitorGetSEVInfo(qemuMonitor *mon,
+-                      unsigned int *apiMajor,
+-                      unsigned int *apiMinor,
+-                      unsigned int *buildID,
+-                      unsigned int *policy)
+-    ATTRIBUTE_NONNULL(1) ATTRIBUTE_NONNULL(2) ATTRIBUTE_NONNULL(3)
+-    ATTRIBUTE_NONNULL(4) ATTRIBUTE_NONNULL(5);
++                      qemuMonitorSEVInfo *info)
++    ATTRIBUTE_NONNULL(1) ATTRIBUTE_NONNULL(2);
+ 
+ int
+ qemuMonitorSetLaunchSecurityState(qemuMonitor *mon,
+diff --git a/src/qemu/qemu_monitor_json.c b/src/qemu/qemu_monitor_json.c
+index aed65274ca1a..affa25d456a4 100644
+--- a/src/qemu/qemu_monitor_json.c
++++ b/src/qemu/qemu_monitor_json.c
+@@ -7988,6 +7988,10 @@ qemuMonitorJSONGetSEVMeasurement(qemuMonitor *mon)
+ }
+ 
+ 
++VIR_ENUM_IMPL(qemuMonitorSEVGuest,
++              QEMU_MONITOR_SEV_GUEST_TYPE_LAST,
++              "sev", "sev-snp");
++
+ /**
+  * Retrieve info about the SEV setup, returning those fields that
+  * are required to do a launch attestation, as per
+@@ -8001,13 +8005,15 @@ qemuMonitorJSONGetSEVMeasurement(qemuMonitor *mon)
+  *  { "return": { "enabled": true, "api-major" : 0, "api-minor" : 0,
+  *                "build-id" : 0, "policy" : 0, "state" : "running",
+  *                "handle" : 1 } }
++ *
++ *  Or newer (as of QEMU v9.0.0-1155-g59d3740cb4):
++ *
++ *  {"return": {"enabled": true, "api-minor": 55, "handle": 1, "state": "launch-secret",
++ *              "api-major": 1, "sev-type": "sev", "build-id": 21, "policy": 1}}
+  */
+ int
+ qemuMonitorJSONGetSEVInfo(qemuMonitor *mon,
+-                          unsigned int *apiMajor,
+-                          unsigned int *apiMinor,
+-                          unsigned int *buildID,
+-                          unsigned int *policy)
++                          qemuMonitorSEVInfo *info)
+ {
+     g_autoptr(virJSONValue) cmd = NULL;
+     g_autoptr(virJSONValue) reply = NULL;
+@@ -8022,16 +8028,51 @@ qemuMonitorJSONGetSEVInfo(qemuMonitor *mon,
+     if (!(data = qemuMonitorJSONGetReply(cmd, reply, VIR_JSON_TYPE_OBJECT)))
+         return -1;
+ 
+-    if (virJSONValueObjectGetNumberUint(data, "api-major", apiMajor) < 0 ||
+-        virJSONValueObjectGetNumberUint(data, "api-minor", apiMinor) < 0 ||
+-        virJSONValueObjectGetNumberUint(data, "build-id", buildID) < 0 ||
+-        virJSONValueObjectGetNumberUint(data, "policy", policy) < 0) {
+-        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+-                       _("query-sev reply was missing some data"));
+-        return -1;
++    if (virJSONValueObjectGetNumberUint(data, "api-major", &info->apiMajor) < 0 ||
++        virJSONValueObjectGetNumberUint(data, "api-minor", &info->apiMinor) < 0 ||
++        virJSONValueObjectGetNumberUint(data, "build-id", &info->buildID) < 0) {
++        goto error;
++    }
++
++    if (virJSONValueObjectHasKey(data, "sev-type")) {
++        const char *sevTypeStr = virJSONValueObjectGetString(data, "sev-type");
++        int sevType;
++
++        if ((sevType = qemuMonitorSEVGuestTypeFromString(sevTypeStr)) < 0) {
++            virReportError(VIR_ERR_INTERNAL_ERROR,
++                           _("unknown SEV type '%1$s'"),
++                           sevTypeStr);
++            return -1;
++        }
++
++        info->type = sevType;
++    } else {
++        info->type = QEMU_MONITOR_SEV_GUEST_TYPE_SEV;
++    }
++
++    switch (info->type) {
++    case QEMU_MONITOR_SEV_GUEST_TYPE_SEV:
++        if (virJSONValueObjectGetNumberUint(data, "policy", &info->data.sev.policy) < 0 ||
++            virJSONValueObjectGetNumberUint(data, "handle", &info->data.sev.handle) < 0) {
++            goto error;
++        }
++        break;
++
++    case QEMU_MONITOR_SEV_GUEST_TYPE_SEV_SNP:
++        if (virJSONValueObjectGetNumberUlong(data, "snp-policy", &info->data.sev_snp.snp_policy) < 0)
++            goto error;
++        break;
++
++    case QEMU_MONITOR_SEV_GUEST_TYPE_LAST:
++        break;
+     }
+ 
+     return 0;
++
++ error:
++    virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
++                   _("query-sev reply was missing some data"));
++    return -1;
+ }
+ 
+ 
+diff --git a/src/qemu/qemu_monitor_json.h b/src/qemu/qemu_monitor_json.h
+index ed0027c118e6..53ba584fb950 100644
+--- a/src/qemu/qemu_monitor_json.h
++++ b/src/qemu/qemu_monitor_json.h
+@@ -417,12 +417,8 @@ qemuMonitorJSONGetSEVMeasurement(qemuMonitor *mon);
+ 
+ int
+ qemuMonitorJSONGetSEVInfo(qemuMonitor *mon,
+-                          unsigned int *apiMajor,
+-                          unsigned int *apiMinor,
+-                          unsigned int *buildID,
+-                          unsigned int *policy)
+-    ATTRIBUTE_NONNULL(1) ATTRIBUTE_NONNULL(2) ATTRIBUTE_NONNULL(3)
+-    ATTRIBUTE_NONNULL(4) ATTRIBUTE_NONNULL(5);
++                          qemuMonitorSEVInfo *info)
++    ATTRIBUTE_NONNULL(1) ATTRIBUTE_NONNULL(2);
+ 
+ int
+ qemuMonitorJSONGetVersion(qemuMonitor *mon,
+diff --git a/tests/qemumonitorjsontest.c b/tests/qemumonitorjsontest.c
+index 45cee2379819..66d0c127ca3c 100644
+--- a/tests/qemumonitorjsontest.c
++++ b/tests/qemumonitorjsontest.c
+@@ -2730,10 +2730,7 @@ testQemuMonitorJSONGetSEVInfo(const void *opaque)
+     const testGenericData *data = opaque;
+     virDomainXMLOption *xmlopt = data->xmlopt;
+     g_autoptr(qemuMonitorTest) test = NULL;
+-    unsigned int apiMajor = 0;
+-    unsigned int apiMinor = 0;
+-    unsigned int buildID = 0;
+-    unsigned int policy = 0;
++    qemuMonitorSEVInfo info = { };
+ 
+     if (!(test = qemuMonitorTestNewSchema(xmlopt, data->schema)))
+         return -1;
+@@ -2753,16 +2750,70 @@ testQemuMonitorJSONGetSEVInfo(const void *opaque)
+                                "}") < 0)
+         return -1;
+ 
+-    if (qemuMonitorGetSEVInfo(qemuMonitorTestGetMonitor(test),
+-                              &apiMajor, &apiMinor, &buildID, &policy) < 0)
++    if (qemuMonitorGetSEVInfo(qemuMonitorTestGetMonitor(test), &info) < 0)
+         return -1;
+ 
+-    if (apiMajor != 1 || apiMinor != 8 || buildID != 834 || policy != 3) {
++    if (info.apiMajor != 1 || info.apiMinor != 8 || info.buildID != 834 ||
++        info.type != QEMU_MONITOR_SEV_GUEST_TYPE_SEV ||
++        info.data.sev.policy != 3 || info.data.sev.handle != 0) {
+         virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                        "Unexpected SEV info values");
+         return -1;
+     }
+ 
++    if (qemuMonitorTestAddItem(test, "query-sev",
++                               "{"
++                               "    \"return\": {"
++                               "        \"enabled\": true,"
++                               "        \"api-minor\": 55,"
++                               "        \"handle\": 1,"
++                               "        \"state\": \"running\","
++                               "        \"api-major\": 1,"
++                               "        \"sev-type\": \"sev\","
++                               "        \"build-id\": 21,"
++                               "        \"policy\": 1"
++                               "    },"
++                               "    \"id\": \"libvirt-16\""
++                               "}") < 0)
++        return -1;
++
++    if (qemuMonitorGetSEVInfo(qemuMonitorTestGetMonitor(test), &info) < 0)
++        return -1;
++
++    if (info.apiMajor != 1 || info.apiMinor != 55 || info.buildID != 21 ||
++        info.type != QEMU_MONITOR_SEV_GUEST_TYPE_SEV ||
++        info.data.sev.policy != 1 || info.data.sev.handle != 1) {
++        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
++                       "Unexpected SEV info values");
++        return -1;
++    }
++
++    if (qemuMonitorTestAddItem(test, "query-sev",
++                               "{"
++                               "    \"return\": {"
++                               "        \"enabled\": true,"
++                               "        \"api-minor\": 55,"
++                               "        \"state\": \"running\","
++                               "        \"api-major\": 1,"
++                               "        \"sev-type\": \"sev-snp\","
++                               "        \"build-id\": 21,"
++                               "        \"snp-policy\": 196608"
++                               "    },"
++                               "    \"id\": \"libvirt-16\""
++                               "}") < 0)
++        return -1;
++
++    if (qemuMonitorGetSEVInfo(qemuMonitorTestGetMonitor(test), &info) < 0)
++        return -1;
++
++    if (info.apiMajor != 1 || info.apiMinor != 55 || info.buildID != 21 ||
++        info.type != QEMU_MONITOR_SEV_GUEST_TYPE_SEV_SNP ||
++        info.data.sev_snp.snp_policy != 0x30000) {
++        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
++                       "Unexpected SEV SNP info values");
++        return -1;
++    }
++
+     return 0;
+ }
+ 
+-- 
+2.43.0
+

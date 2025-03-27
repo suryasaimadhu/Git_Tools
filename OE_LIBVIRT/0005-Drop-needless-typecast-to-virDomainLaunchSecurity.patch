@@ -1,0 +1,134 @@
+From 76757fd9d449d417367529f306c3afe3a94bed5f Mon Sep 17 00:00:00 2001
+From: Michal Privoznik <mprivozn@redhat.com>
+Date: Wed, 12 Jun 2024 10:06:57 +0200
+Subject: [PATCH 05/15] Drop needless typecast to virDomainLaunchSecurity
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+commit a44a43361feea6cf9809cb9ea5873cdf197975fb upstream
+
+The sectype member of _virDomainSecDef struct is already declared
+as of virDomainLaunchSecurity type. There's no need to typecast
+it to the very same type when passing it to switch().
+
+Signed-off-by: Michal Privoznik <mprivozn@redhat.com>
+Reviewed-by: Daniel P. Berrangé <berrange@redhat.com>
+Signed-off-by: suryasaimadhu <saimadhu.koyyalaharivenkata@amd.com>
+---
+ src/conf/domain_conf.c    | 6 +++---
+ src/qemu/qemu_command.c   | 4 ++--
+ src/qemu/qemu_firmware.c  | 2 +-
+ src/qemu/qemu_namespace.c | 2 +-
+ src/qemu/qemu_process.c   | 2 +-
+ src/qemu/qemu_validate.c  | 2 +-
+ 6 files changed, 9 insertions(+), 9 deletions(-)
+
+diff --git a/src/conf/domain_conf.c b/src/conf/domain_conf.c
+index f88369f55516..9c449d1ff2e0 100644
+--- a/src/conf/domain_conf.c
++++ b/src/conf/domain_conf.c
+@@ -3824,7 +3824,7 @@ virDomainSecDefFree(virDomainSecDef *def)
+     if (!def)
+         return;
+ 
+-    switch ((virDomainLaunchSecurity) def->sectype) {
++    switch (def->sectype) {
+     case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
+         g_free(def->data.sev.dh_cert);
+         g_free(def->data.sev.session);
+@@ -13582,7 +13582,7 @@ virDomainSecDefParseXML(xmlNodePtr lsecNode,
+                        &sec->sectype) < 0)
+         return NULL;
+ 
+-    switch ((virDomainLaunchSecurity) sec->sectype) {
++    switch (sec->sectype) {
+     case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
+         if (virDomainSEVDefParseXML(&sec->data.sev, ctxt) < 0)
+             return NULL;
+@@ -26634,7 +26634,7 @@ virDomainSecDefFormat(virBuffer *buf, virDomainSecDef *sec)
+     virBufferAsprintf(&attrBuf, " type='%s'",
+                       virDomainLaunchSecurityTypeToString(sec->sectype));
+ 
+-    switch ((virDomainLaunchSecurity) sec->sectype) {
++    switch (sec->sectype) {
+     case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
+         virDomainSEVDefFormat(&attrBuf, &childBuf, &sec->data.sev);
+         break;
+diff --git a/src/qemu/qemu_command.c b/src/qemu/qemu_command.c
+index 9cb4d54538b4..473f48b778f7 100644
+--- a/src/qemu/qemu_command.c
++++ b/src/qemu/qemu_command.c
+@@ -7031,7 +7031,7 @@ qemuBuildMachineCommandLine(virCommand *cmd,
+     qemuAppendLoadparmMachineParm(&buf, def);
+ 
+     if (def->sec) {
+-        switch ((virDomainLaunchSecurity) def->sec->sectype) {
++        switch (def->sec->sectype) {
+         case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
+             if (virQEMUCapsGet(qemuCaps, QEMU_CAPS_MACHINE_CONFIDENTAL_GUEST_SUPPORT)) {
+                 virBufferAddLit(&buf, ",confidential-guest-support=lsec0");
+@@ -9786,7 +9786,7 @@ qemuBuildSecCommandLine(virDomainObj *vm, virCommand *cmd,
+     if (!sec)
+         return 0;
+ 
+-    switch ((virDomainLaunchSecurity) sec->sectype) {
++    switch (sec->sectype) {
+     case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
+         return qemuBuildSEVCommandLine(vm, cmd, &sec->data.sev);
+         break;
+diff --git a/src/qemu/qemu_firmware.c b/src/qemu/qemu_firmware.c
+index 31ed6e881bb9..8ee16daf8d49 100644
+--- a/src/qemu/qemu_firmware.c
++++ b/src/qemu/qemu_firmware.c
+@@ -1358,7 +1358,7 @@ qemuFirmwareMatchDomain(const virDomainDef *def,
+     }
+ 
+     if (def->sec) {
+-        switch ((virDomainLaunchSecurity) def->sec->sectype) {
++        switch (def->sec->sectype) {
+         case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
+             if (!supportsSEV) {
+                 VIR_DEBUG("Domain requires SEV, firmware '%s' doesn't support it",
+diff --git a/src/qemu/qemu_namespace.c b/src/qemu/qemu_namespace.c
+index ff314ce243c0..821e0594802d 100644
+--- a/src/qemu/qemu_namespace.c
++++ b/src/qemu/qemu_namespace.c
+@@ -651,7 +651,7 @@ qemuDomainSetupLaunchSecurity(virDomainObj *vm,
+     if (!sec)
+         return 0;
+ 
+-    switch ((virDomainLaunchSecurity) sec->sectype) {
++    switch (sec->sectype) {
+     case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
+         VIR_DEBUG("Setting up launch security for SEV");
+ 
+diff --git a/src/qemu/qemu_process.c b/src/qemu/qemu_process.c
+index 36bf68ca43ed..07a8f19aefa3 100644
+--- a/src/qemu/qemu_process.c
++++ b/src/qemu/qemu_process.c
+@@ -7052,7 +7052,7 @@ qemuProcessPrepareLaunchSecurityGuestInput(virDomainObj *vm)
+     if (!sec)
+         return 0;
+ 
+-    switch ((virDomainLaunchSecurity) sec->sectype) {
++    switch (sec->sectype) {
+     case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
+         return qemuProcessPrepareSEVGuestInput(vm);
+     case VIR_DOMAIN_LAUNCH_SECURITY_PV:
+diff --git a/src/qemu/qemu_validate.c b/src/qemu/qemu_validate.c
+index a5c22ee4be92..33f0994d141e 100644
+--- a/src/qemu/qemu_validate.c
++++ b/src/qemu/qemu_validate.c
+@@ -1297,7 +1297,7 @@ qemuValidateDomainDef(const virDomainDef *def,
+         return -1;
+ 
+     if (def->sec) {
+-        switch ((virDomainLaunchSecurity) def->sec->sectype) {
++        switch (def->sec->sectype) {
+         case VIR_DOMAIN_LAUNCH_SECURITY_SEV:
+             if (!virQEMUCapsGet(qemuCaps, QEMU_CAPS_SEV_GUEST)) {
+                 virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+-- 
+2.43.0
+

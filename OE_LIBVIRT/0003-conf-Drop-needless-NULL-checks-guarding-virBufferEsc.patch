@@ -1,0 +1,393 @@
+From bfedc358a6fcb28de7bae2eff3edca9bea612b84 Mon Sep 17 00:00:00 2001
+From: Michal Privoznik <mprivozn@redhat.com>
+Date: Mon, 17 Jun 2024 11:53:46 +0200
+Subject: [PATCH 03/15] conf: Drop needless NULL checks guarding
+ virBufferEscapeString()
+
+commit be58733d903fdd4a9a64483f14dbb4af97e526f3 upstream
+
+There's no need to guard virBufferEscapeString() with a call to
+NULL as the very first thing the function does is check all three
+arguments for NULL.
+
+This patch was generated using the following spatch:
+
+  @@
+  expression X, Y, E;
+  @@
+
+  - if (E)
+      virBufferEscapeString(X, Y, E);
+
+Signed-off-by: Michal Privoznik <mprivozn@redhat.com>
+Reviewed-by: Jonathon Jongsma <jjongsma@redhat.com>
+Signed-off-by: suryasaimadhu <saimadhu.koyyalaharivenkata@amd.com>
+---
+ src/conf/capabilities.c            |  6 ++--
+ src/conf/domain_conf.c             | 57 +++++++++++-------------------
+ src/conf/network_conf.c            |  6 ++--
+ src/conf/node_device_conf.c        | 57 ++++++++++++------------------
+ src/conf/snapshot_conf.c           |  5 ++-
+ src/conf/storage_encryption_conf.c |  9 ++---
+ src/conf/storage_source_conf.c     |  3 +-
+ src/conf/virnwfilterbindingdef.c   |  3 +-
+ 8 files changed, 55 insertions(+), 91 deletions(-)
+
+diff --git a/src/conf/capabilities.c b/src/conf/capabilities.c
+index 02298e40a310..aca9be7c8357 100644
+--- a/src/conf/capabilities.c
++++ b/src/conf/capabilities.c
+@@ -688,10 +688,8 @@ virCapabilitiesDomainDataLookupInternal(virCaps *caps,
+         if (domaintype > VIR_DOMAIN_VIRT_NONE)
+             virBufferAsprintf(&buf, "domaintype=%s ",
+                               virDomainVirtTypeToString(domaintype));
+-        if (emulator)
+-            virBufferEscapeString(&buf, "emulator=%s ", emulator);
+-        if (machinetype)
+-            virBufferEscapeString(&buf, "machine=%s ", machinetype);
++        virBufferEscapeString(&buf, "emulator=%s ", emulator);
++        virBufferEscapeString(&buf, "machine=%s ", machinetype);
+         if (virBufferCurrentContent(&buf) &&
+             !virBufferCurrentContent(&buf)[0])
+             virBufferAsprintf(&buf, "%s", _("any configuration"));
+diff --git a/src/conf/domain_conf.c b/src/conf/domain_conf.c
+index f2f17cfd8339..3a790602e279 100644
+--- a/src/conf/domain_conf.c
++++ b/src/conf/domain_conf.c
+@@ -5377,8 +5377,7 @@ virDomainDeviceInfoFormat(virBuffer *buf,
+             if (rombar)
+                 virBufferAsprintf(buf, " bar='%s'", rombar);
+         }
+-        if (info->romfile)
+-            virBufferEscapeString(buf, " file='%s'", info->romfile);
++        virBufferEscapeString(buf, " file='%s'", info->romfile);
+         virBufferAddLit(buf, "/>\n");
+     }
+ 
+@@ -22163,8 +22162,7 @@ virSecurityDeviceLabelDefFormat(virBuffer *buf,
+ 
+     virBufferAddLit(buf, "<seclabel");
+ 
+-    if (def->model)
+-        virBufferEscapeString(buf, " model='%s'", def->model);
++    virBufferEscapeString(buf, " model='%s'", def->model);
+ 
+     if (def->labelskip)
+         virBufferAddLit(buf, " labelskip='yes'");
+@@ -22359,8 +22357,7 @@ virDomainDiskSourceFormatNetwork(virBuffer *attrBuf,
+         virBufferAsprintf(childBuf, "<timeout seconds='%llu'/>\n", src->timeout);
+ 
+     if (src->protocol == VIR_STORAGE_NET_PROTOCOL_SSH) {
+-        if (src->ssh_known_hosts_file)
+-            virBufferEscapeString(childBuf, "<knownHosts path='%s'/>\n", src->ssh_known_hosts_file);
++        virBufferEscapeString(childBuf, "<knownHosts path='%s'/>\n", src->ssh_known_hosts_file);
+         if (src->ssh_keyfile || src->ssh_agent) {
+             virBufferAddLit(childBuf, "<identity");
+ 
+@@ -23128,8 +23125,7 @@ virDomainControllerDefFormat(virBuffer *buf,
+                       " type='%s' index='%d'",
+                       type, def->idx);
+ 
+-    if (model)
+-        virBufferEscapeString(&attrBuf, " model='%s'", model);
++    virBufferEscapeString(&attrBuf, " model='%s'", model);
+ 
+     switch (def->type) {
+     case VIR_DOMAIN_CONTROLLER_TYPE_VIRTIO_SERIAL:
+@@ -24548,8 +24544,7 @@ virDomainChrTargetDefFormat(virBuffer *buf,
+ 
+         case VIR_DOMAIN_CHR_CHANNEL_TARGET_TYPE_XEN:
+         case VIR_DOMAIN_CHR_CHANNEL_TARGET_TYPE_VIRTIO:
+-            if (def->target.name)
+-                virBufferEscapeString(buf, " name='%s'", def->target.name);
++            virBufferEscapeString(buf, " name='%s'", def->target.name);
+ 
+             if (def->targetType == VIR_DOMAIN_CHR_CHANNEL_TARGET_TYPE_VIRTIO &&
+                 def->state != VIR_DOMAIN_CHR_DEVICE_STATE_DEFAULT &&
+@@ -25956,9 +25951,8 @@ virDomainGraphicsDefFormat(virBuffer *buf,
+             break;
+         }
+ 
+-        if (def->data.vnc.keymap)
+-            virBufferEscapeString(buf, " keymap='%s'",
+-                                  def->data.vnc.keymap);
++        virBufferEscapeString(buf, " keymap='%s'",
++                              def->data.vnc.keymap);
+ 
+         if (def->data.vnc.sharePolicy)
+             virBufferAsprintf(buf, " sharePolicy='%s'",
+@@ -25973,13 +25967,11 @@ virDomainGraphicsDefFormat(virBuffer *buf,
+         break;
+ 
+     case VIR_DOMAIN_GRAPHICS_TYPE_SDL:
+-        if (def->data.sdl.display)
+-            virBufferEscapeString(buf, " display='%s'",
+-                                  def->data.sdl.display);
++        virBufferEscapeString(buf, " display='%s'",
++                              def->data.sdl.display);
+ 
+-        if (def->data.sdl.xauth)
+-            virBufferEscapeString(buf, " xauth='%s'",
+-                                  def->data.sdl.xauth);
++        virBufferEscapeString(buf, " xauth='%s'",
++                              def->data.sdl.xauth);
+         if (def->data.sdl.fullscreen)
+             virBufferAddLit(buf, " fullscreen='yes'");
+ 
+@@ -26018,9 +26010,8 @@ virDomainGraphicsDefFormat(virBuffer *buf,
+         break;
+ 
+     case VIR_DOMAIN_GRAPHICS_TYPE_DESKTOP:
+-        if (def->data.desktop.display)
+-            virBufferEscapeString(buf, " display='%s'",
+-                                  def->data.desktop.display);
++        virBufferEscapeString(buf, " display='%s'",
++                              def->data.desktop.display);
+ 
+         if (def->data.desktop.fullscreen)
+             virBufferAddLit(buf, " fullscreen='yes'");
+@@ -26073,9 +26064,8 @@ virDomainGraphicsDefFormat(virBuffer *buf,
+             break;
+         }
+ 
+-        if (def->data.spice.keymap)
+-            virBufferEscapeString(buf, " keymap='%s'",
+-                                  def->data.spice.keymap);
++        virBufferEscapeString(buf, " keymap='%s'",
++                              def->data.spice.keymap);
+ 
+         if (def->data.spice.defaultMode != VIR_DOMAIN_GRAPHICS_SPICE_CHANNEL_MODE_ANY)
+             virBufferAsprintf(buf, " defaultMode='%s'",
+@@ -26447,11 +26437,9 @@ virDomainResourceDefFormat(virBuffer *buf,
+     if (!def)
+         return;
+ 
+-    if (def->partition)
+-        virBufferEscapeString(&childBuf, "<partition>%s</partition>\n", def->partition);
++    virBufferEscapeString(&childBuf, "<partition>%s</partition>\n", def->partition);
+ 
+-    if (def->appid)
+-        virBufferEscapeString(&childBuf, "<fibrechannel appid='%s'/>\n", def->appid);
++    virBufferEscapeString(&childBuf, "<fibrechannel appid='%s'/>\n", def->appid);
+ 
+     virXMLFormatElement(buf, "resource", NULL, &childBuf);
+ }
+@@ -26634,11 +26622,9 @@ virDomainSecDefFormat(virBuffer *buf, virDomainSecDef *sec)
+         virDomainSEVCommonDefFormat(&attrBuf, &childBuf, &sev->common);
+ 
+         virBufferAsprintf(&childBuf, "<policy>0x%04x</policy>\n", sev->policy);
+-        if (sev->dh_cert)
+-            virBufferEscapeString(&childBuf, "<dhCert>%s</dhCert>\n", sev->dh_cert);
++        virBufferEscapeString(&childBuf, "<dhCert>%s</dhCert>\n", sev->dh_cert);
+ 
+-        if (sev->session)
+-            virBufferEscapeString(&childBuf, "<session>%s</session>\n", sev->session);
++        virBufferEscapeString(&childBuf, "<session>%s</session>\n", sev->session);
+ 
+         if (sev->user_id)
+             virBufferEscapeString(&childBuf, "<userid>%s</userid>\n", sev->user_id);
+@@ -27869,9 +27855,8 @@ virDomainDefFormatInternalSetRootName(virDomainDef *def,
+     for (i = 0; def->os.initenv && def->os.initenv[i]; i++)
+         virBufferAsprintf(buf, "<initenv name='%s'>%s</initenv>\n",
+                           def->os.initenv[i]->name, def->os.initenv[i]->value);
+-    if (def->os.initdir)
+-        virBufferEscapeString(buf, "<initdir>%s</initdir>\n",
+-                              def->os.initdir);
++    virBufferEscapeString(buf, "<initdir>%s</initdir>\n",
++                          def->os.initdir);
+     if (def->os.inituser)
+         virBufferAsprintf(buf, "<inituser>%s</inituser>\n", def->os.inituser);
+     if (def->os.initgroup)
+diff --git a/src/conf/network_conf.c b/src/conf/network_conf.c
+index 0449b6f07c73..cc8956af538c 100644
+--- a/src/conf/network_conf.c
++++ b/src/conf/network_conf.c
+@@ -2043,10 +2043,8 @@ virNetworkDNSDefFormat(virBuffer *buf,
+                                   def->srvs[i].service);
+             virBufferEscapeString(buf, "protocol='%s'", def->srvs[i].protocol);
+ 
+-            if (def->srvs[i].domain)
+-                virBufferEscapeString(buf, " domain='%s'", def->srvs[i].domain);
+-            if (def->srvs[i].target)
+-                virBufferEscapeString(buf, " target='%s'", def->srvs[i].target);
++            virBufferEscapeString(buf, " domain='%s'", def->srvs[i].domain);
++            virBufferEscapeString(buf, " target='%s'", def->srvs[i].target);
+             if (def->srvs[i].port)
+                 virBufferAsprintf(buf, " port='%d'", def->srvs[i].port);
+             if (def->srvs[i].priority)
+diff --git a/src/conf/node_device_conf.c b/src/conf/node_device_conf.c
+index f722ab37c60a..6c78c9a26338 100644
+--- a/src/conf/node_device_conf.c
++++ b/src/conf/node_device_conf.c
+@@ -176,20 +176,16 @@ virNodeDeviceCapSystemDefFormat(virBuffer *buf,
+ {
+     char uuidstr[VIR_UUID_STRING_BUFLEN];
+ 
+-    if (data->system.product_name)
+-        virBufferEscapeString(buf, "<product>%s</product>\n",
+-                              data->system.product_name);
++    virBufferEscapeString(buf, "<product>%s</product>\n",
++                          data->system.product_name);
+     virBufferAddLit(buf, "<hardware>\n");
+     virBufferAdjustIndent(buf, 2);
+-    if (data->system.hardware.vendor_name)
+-        virBufferEscapeString(buf, "<vendor>%s</vendor>\n",
+-                              data->system.hardware.vendor_name);
+-    if (data->system.hardware.version)
+-        virBufferEscapeString(buf, "<version>%s</version>\n",
+-                              data->system.hardware.version);
+-    if (data->system.hardware.serial)
+-        virBufferEscapeString(buf, "<serial>%s</serial>\n",
+-                              data->system.hardware.serial);
++    virBufferEscapeString(buf, "<vendor>%s</vendor>\n",
++                          data->system.hardware.vendor_name);
++    virBufferEscapeString(buf, "<version>%s</version>\n",
++                          data->system.hardware.version);
++    virBufferEscapeString(buf, "<serial>%s</serial>\n",
++                          data->system.hardware.serial);
+     virUUIDFormat(data->system.hardware.uuid, uuidstr);
+     virBufferAsprintf(buf, "<uuid>%s</uuid>\n", uuidstr);
+     virBufferAdjustIndent(buf, -2);
+@@ -197,15 +193,12 @@ virNodeDeviceCapSystemDefFormat(virBuffer *buf,
+ 
+     virBufferAddLit(buf, "<firmware>\n");
+     virBufferAdjustIndent(buf, 2);
+-    if (data->system.firmware.vendor_name)
+-        virBufferEscapeString(buf, "<vendor>%s</vendor>\n",
+-                              data->system.firmware.vendor_name);
+-    if (data->system.firmware.version)
+-        virBufferEscapeString(buf, "<version>%s</version>\n",
+-                              data->system.firmware.version);
+-    if (data->system.firmware.release_date)
+-        virBufferEscapeString(buf, "<release_date>%s</release_date>\n",
+-                              data->system.firmware.release_date);
++    virBufferEscapeString(buf, "<vendor>%s</vendor>\n",
++                          data->system.firmware.vendor_name);
++    virBufferEscapeString(buf, "<version>%s</version>\n",
++                          data->system.firmware.version);
++    virBufferEscapeString(buf, "<release_date>%s</release_date>\n",
++                          data->system.firmware.release_date);
+     virBufferAdjustIndent(buf, -2);
+     virBufferAddLit(buf, "</firmware>\n");
+ }
+@@ -225,9 +218,8 @@ virNodeDeviceCapMdevTypesFormat(virBuffer *buf,
+             virMediatedDeviceType *type = mdev_types[i];
+             virBufferEscapeString(buf, "<type id='%s'>\n", type->id);
+             virBufferAdjustIndent(buf, 2);
+-            if (type->name)
+-                virBufferEscapeString(buf, "<name>%s</name>\n",
+-                                      type->name);
++            virBufferEscapeString(buf, "<name>%s</name>\n",
++                                  type->name);
+             virBufferEscapeString(buf, "<deviceAPI>%s</deviceAPI>\n",
+                                   type->device_api);
+             virBufferAsprintf(buf,
+@@ -451,10 +443,9 @@ virNodeDeviceCapUSBInterfaceDefFormat(virBuffer *buf,
+                       data->usb_if.subclass);
+     virBufferAsprintf(buf, "<protocol>%d</protocol>\n",
+                       data->usb_if.protocol);
+-    if (data->usb_if.description)
+-        virBufferEscapeString(buf,
+-                              "<description>%s</description>\n",
+-                              data->usb_if.description);
++    virBufferEscapeString(buf,
++                          "<description>%s</description>\n",
++                          data->usb_if.description);
+ }
+ 
+ 
+@@ -466,9 +457,8 @@ virNodeDeviceCapNetDefFormat(virBuffer *buf,
+ 
+     virBufferEscapeString(buf, "<interface>%s</interface>\n",
+                           data->net.ifname);
+-    if (data->net.address)
+-        virBufferEscapeString(buf, "<address>%s</address>\n",
+-                              data->net.address);
++    virBufferEscapeString(buf, "<address>%s</address>\n",
++                          data->net.address);
+     virInterfaceLinkFormat(buf, &data->net.lnk);
+     if (data->net.features) {
+         for (i = 0; i < VIR_NET_DEV_FEAT_LAST; i++) {
+@@ -530,9 +520,8 @@ virNodeDeviceCapSCSIDefFormat(virBuffer *buf,
+     virBufferAsprintf(buf, "<target>%d</target>\n",
+                       data->scsi.target);
+     virBufferAsprintf(buf, "<lun>%d</lun>\n", data->scsi.lun);
+-    if (data->scsi.type)
+-        virBufferEscapeString(buf, "<type>%s</type>\n",
+-                              data->scsi.type);
++    virBufferEscapeString(buf, "<type>%s</type>\n",
++                          data->scsi.type);
+ }
+ 
+ 
+diff --git a/src/conf/snapshot_conf.c b/src/conf/snapshot_conf.c
+index d7fcded302a4..039ed77b846c 100644
+--- a/src/conf/snapshot_conf.c
++++ b/src/conf/snapshot_conf.c
+@@ -819,9 +819,8 @@ virDomainSnapshotDefFormatInternal(virBuffer *buf,
+     virBufferAdjustIndent(buf, 2);
+ 
+     virBufferEscapeString(buf, "<name>%s</name>\n", def->parent.name);
+-    if (def->parent.description)
+-        virBufferEscapeString(buf, "<description>%s</description>\n",
+-                              def->parent.description);
++    virBufferEscapeString(buf, "<description>%s</description>\n",
++                          def->parent.description);
+     if (def->state)
+         virBufferAsprintf(buf, "<state>%s</state>\n",
+                           virDomainSnapshotStateTypeToString(def->state));
+diff --git a/src/conf/storage_encryption_conf.c b/src/conf/storage_encryption_conf.c
+index 1849df5c6c9b..b86001ec5092 100644
+--- a/src/conf/storage_encryption_conf.c
++++ b/src/conf/storage_encryption_conf.c
+@@ -317,16 +317,13 @@ virStorageEncryptionInfoDefFormat(virBuffer *buf,
+ {
+     virBufferEscapeString(buf, "<cipher name='%s'", enc->cipher_name);
+     virBufferAsprintf(buf, " size='%u'", enc->cipher_size);
+-    if (enc->cipher_mode)
+-        virBufferEscapeString(buf, " mode='%s'", enc->cipher_mode);
+-    if (enc->cipher_hash)
+-        virBufferEscapeString(buf, " hash='%s'", enc->cipher_hash);
++    virBufferEscapeString(buf, " mode='%s'", enc->cipher_mode);
++    virBufferEscapeString(buf, " hash='%s'", enc->cipher_hash);
+     virBufferAddLit(buf, "/>\n");
+ 
+     if (enc->ivgen_name) {
+         virBufferEscapeString(buf, "<ivgen name='%s'", enc->ivgen_name);
+-        if (enc->ivgen_hash)
+-            virBufferEscapeString(buf, " hash='%s'", enc->ivgen_hash);
++        virBufferEscapeString(buf, " hash='%s'", enc->ivgen_hash);
+         virBufferAddLit(buf, "/>\n");
+     }
+ }
+diff --git a/src/conf/storage_source_conf.c b/src/conf/storage_source_conf.c
+index f974a521b1f6..003fbf031e29 100644
+--- a/src/conf/storage_source_conf.c
++++ b/src/conf/storage_source_conf.c
+@@ -1347,8 +1347,7 @@ int
+ virStorageSourcePrivateDataFormatRelPath(virStorageSource *src,
+                                          virBuffer *buf)
+ {
+-    if (src->relPath)
+-        virBufferEscapeString(buf, "<relPath>%s</relPath>\n", src->relPath);
++    virBufferEscapeString(buf, "<relPath>%s</relPath>\n", src->relPath);
+ 
+     return 0;
+ }
+diff --git a/src/conf/virnwfilterbindingdef.c b/src/conf/virnwfilterbindingdef.c
+index 423ed7a392b3..fe45c8434721 100644
+--- a/src/conf/virnwfilterbindingdef.c
++++ b/src/conf/virnwfilterbindingdef.c
+@@ -203,8 +203,7 @@ virNWFilterBindingDefFormatBuf(virBuffer *buf,
+     virBufferAddLit(buf, "</owner>\n");
+ 
+     virBufferEscapeString(buf, "<portdev name='%s'/>\n", def->portdevname);
+-    if (def->linkdevname)
+-        virBufferEscapeString(buf, "<linkdev name='%s'/>\n", def->linkdevname);
++    virBufferEscapeString(buf, "<linkdev name='%s'/>\n", def->linkdevname);
+ 
+     virMacAddrFormat(&def->mac, mac);
+     virBufferAsprintf(buf, "<mac address='%s'/>\n", mac);
+-- 
+2.43.0
+
