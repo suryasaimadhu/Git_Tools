@@ -296,6 +296,137 @@ def reverse_commits():
 
     print(f"\nReversed commits have been saved to: {os.path.abspath(output_file)}")
 
+def create_excel_review_request(review_items, backport_base_url, upstream_base_url, reverse_order):
+    """Create an Excel spreadsheet for the review request with exact formatting"""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        print("\033[0;31mError: Required library not found. Please install: pip install openpyxl\033[0m")
+        return False
+
+    # Create Excel workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"  # Default sheet name
+
+    # Define styles to match the reference format exactly
+    # Header styles - Light peach/pink background with black text
+    header_font = Font(bold=True, size=11, color="000000", name="Calibri")
+    header_fill = PatternFill(start_color="FFE6CC", end_color="FFE6CC", fill_type="solid")  # Light peach/pink
+    header_alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
+    
+    # Number cell style (for the merged cell with number)
+    number_font = Font(bold=True, size=11, color="000000", name="Calibri")
+    number_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")  # Yellow
+    number_alignment = Alignment(horizontal='center', vertical='center')
+    
+    # Data row styles
+    normal_font = Font(size=11, name="Calibri", color="000000")
+    link_font = Font(size=11, name="Calibri", color="0563C1", underline="single")  # Blue hyperlink
+    
+    # Alignment styles
+    center_alignment = Alignment(horizontal='center', vertical='center')
+    left_alignment = Alignment(horizontal='left', vertical='center', wrap_text=False)
+    
+    # Border styles - Thin borders all around
+    thin_border = Border(
+        left=Side(style='thin', color='000000'),
+        right=Side(style='thin', color='000000'),
+        top=Side(style='thin', color='000000'),
+        bottom=Side(style='thin', color='000000')
+    )
+    
+    # No fill for data rows
+    no_fill = PatternFill(fill_type=None)
+
+    # First row - headers
+    headers = [
+        ("A", 1, "Subject"),
+        ("B", 1, "Backported\nSHA ID"),
+        ("C", 1, "Upstream\nSHA ID"),
+        ("D", 1, "Approved")
+    ]
+
+    # Write headers
+    for col, row, header in headers:
+        cell = ws[f"{col}{row}"]
+        cell.value = header
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_alignment
+        cell.border = thin_border
+
+    # Set column widths to match the reference
+    ws.column_dimensions['A'].width = 60.00   # Subject (wide)
+    ws.column_dimensions['B'].width = 20.00   # Backported SHA ID
+    ws.column_dimensions['C'].width = 20.00   # Upstream SHA ID
+    ws.column_dimensions['D'].width = 15.00   # Approved
+
+    # Set row heights
+    ws.row_dimensions[1].height = 35  # Header row (taller for wrapped text)
+
+    # Add data rows starting from row 2
+    for idx, item in enumerate(review_items, 1):
+        row = idx + 1  # Start from row 2
+        
+        # Set row height for data rows
+        ws.row_dimensions[row].height = 18
+        
+        # Subject - left aligned
+        cell = ws.cell(row=row, column=1, value=item['subject'])
+        cell.font = normal_font
+        cell.alignment = left_alignment
+        cell.border = thin_border
+        
+        # Backported SHA ID - hyperlink (first 12 characters)
+        backport_url = f"{backport_base_url}{item['full_backport_id']}"
+        # Display only first 12 characters
+        display_backport = item['full_backport_id'][:12] if len(item['full_backport_id']) >= 12 else item['full_backport_id']
+        cell = ws.cell(row=row, column=2, value=display_backport)
+        cell.hyperlink = backport_url
+        cell.font = link_font
+        cell.alignment = left_alignment
+        cell.border = thin_border
+        
+        # Upstream SHA ID - hyperlink (first 12 characters)
+        upstream_url = f"{upstream_base_url}{item['full_upstream_id']}"
+        # Display only first 12 characters
+        display_upstream = item['full_upstream_id'][:12] if len(item['full_upstream_id']) >= 12 else item['full_upstream_id']
+        cell = ws.cell(row=row, column=3, value=display_upstream)
+        cell.hyperlink = upstream_url
+        cell.font = link_font
+        cell.alignment = left_alignment
+        cell.border = thin_border
+        
+        # Approved - empty
+        cell = ws.cell(row=row, column=4, value="")
+        cell.font = normal_font
+        cell.alignment = center_alignment
+        cell.border = thin_border
+
+    # Optional: Add the yellow merged cell at the top if you want it
+    # This would require shifting everything down by one row
+    # For now, keeping it simple as shown in the second image
+
+    # Set sheet view options
+    ws.sheet_view.showGridLines = True
+    ws.sheet_view.zoomScale = 100
+
+    # Save the file
+    excel_filename = "code_review_request.xlsx"
+    wb.save(excel_filename)
+    
+    print(f"\nExcel file created: {os.path.abspath(excel_filename)}")
+    print(f"Total commits in review: {len(review_items)}")
+    if reverse_order:
+        print("Note: Commits are ordered from oldest to newest (reversed order).")
+    else:
+        print("Note: Commits are ordered from newest to oldest (default order).")
+    
+    return True
+
 def create_review_request():
     """Create a formatted review request from git log entries"""
     print("Review Request Generator")
@@ -418,6 +549,21 @@ def create_review_request():
             break
         except ValueError:
             print("Please enter a valid number.")
+    
+    # NEW: Ask for output format
+    print("\nSelect output format:")
+    print("1) HTML file")
+    print("2) Excel spreadsheet")
+    
+    while True:
+        try:
+            format_choice = int(input("Enter your choice (1-2): "))
+            if format_choice in [1, 2]:
+                break
+            else:
+                print("Please enter 1 or 2.")
+        except ValueError:
+            print("Please enter a valid number.")
             
     # Ask if user wants to reverse the order of commits
     reverse_order = input("\nDo you want to reverse the order of commits (oldest first)? (y/n): ").lower() == 'y'
@@ -483,6 +629,19 @@ def create_review_request():
     if reverse_order:
         review_items.reverse()
 
+    # Generate output based on format choice
+    if format_choice == 1:
+        # Generate HTML output (existing functionality)
+        generate_html_review_request(review_items, backport_base_url, upstream_base_url, reverse_order)
+    else:
+        # Generate Excel output (new functionality)
+        success = create_excel_review_request(review_items, backport_base_url, upstream_base_url, reverse_order)
+        if not success:
+            print("\nFalling back to HTML format...")
+            generate_html_review_request(review_items, backport_base_url, upstream_base_url, reverse_order)
+
+def generate_html_review_request(review_items, backport_base_url, upstream_base_url, reverse_order):
+    """Generate HTML format review request (extracted from original function)"""
     # Generate formatted text output
     text_output = ""
     for idx, item in enumerate(review_items, 1):
@@ -573,7 +732,6 @@ def create_review_request():
         print("Note: Commits are ordered from oldest to newest (reversed order).")
     else:
         print("Note: Commits are ordered from newest to oldest (default order).")
-
 
 def modify_repositories():
     """Add or remove repository URLs (admin function)"""
