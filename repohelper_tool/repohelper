@@ -343,10 +343,10 @@ def create_excel_review_request(review_items, backport_base_url, upstream_base_u
 
     # First row - Yellow numbered cell only in A1, B1, C1, D1 empty
     cell_a1 = ws['A1']
-    cell_a1.value = "5"  # You can change this number or make it dynamic
+    cell_a1.value = len(review_items)  # Dynamic count of commits
     cell_a1.font = number_font
     cell_a1.fill = number_fill
-    cell_a1.alignment = number_alignment
+    cell_a1.alignment = Alignment(horizontal='right', vertical='center')  # Right-aligned
     cell_a1.border = thin_border
     
     # Make B1, C1, D1 empty cells with borders but no fill
