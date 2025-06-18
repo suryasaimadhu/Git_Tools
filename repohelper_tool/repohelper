@@ -341,16 +341,34 @@ def create_excel_review_request(review_items, backport_base_url, upstream_base_u
     # No fill for data rows
     no_fill = PatternFill(fill_type=None)
 
-    # First row - headers
-    headers = [
-        ("A", 1, "Subject"),
-        ("B", 1, "Backported\nSHA ID"),
-        ("C", 1, "Upstream\nSHA ID"),
-        ("D", 1, "Approved")
+    # First row - Yellow numbered cell only in A1, B1, C1, D1 empty
+    cell_a1 = ws['A1']
+    cell_a1.value = "5"  # You can change this number or make it dynamic
+    cell_a1.font = number_font
+    cell_a1.fill = number_fill
+    cell_a1.alignment = number_alignment
+    cell_a1.border = thin_border
+    
+    # Make B1, C1, D1 empty cells with borders but no fill
+    empty_cells = ['B1', 'C1', 'D1']
+    for cell_addr in empty_cells:
+        cell = ws[cell_addr]
+        cell.value = ""
+        cell.font = normal_font
+        cell.fill = no_fill
+        cell.alignment = left_alignment
+        cell.border = thin_border
+
+    # Headers in row 2 (A2, B2, C2, D2)
+    headers_row2 = [
+        ("A", 2, "Subject"),
+        ("B", 2, "Backported\nSHA ID"),
+        ("C", 2, "Upstream\nSHA ID"),
+        ("D", 2, "Approved")
     ]
 
-    # Write headers
-    for col, row, header in headers:
+    # Write headers for row 2 (A2, B2, C2, D2)
+    for col, row, header in headers_row2:
         cell = ws[f"{col}{row}"]
         cell.value = header
         cell.font = header_font
@@ -365,11 +383,12 @@ def create_excel_review_request(review_items, backport_base_url, upstream_base_u
     ws.column_dimensions['D'].width = 15.00   # Approved
 
     # Set row heights
-    ws.row_dimensions[1].height = 35  # Header row (taller for wrapped text)
+    ws.row_dimensions[1].height = 20  # Row 1 (merged yellow cell)
+    ws.row_dimensions[2].height = 35  # Row 2 (headers)
 
-    # Add data rows starting from row 2
+    # Add data rows starting from row 3
     for idx, item in enumerate(review_items, 1):
-        row = idx + 1  # Start from row 2
+        row = idx + 2  # Start from row 3
         
         # Set row height for data rows
         ws.row_dimensions[row].height = 18
@@ -406,16 +425,12 @@ def create_excel_review_request(review_items, backport_base_url, upstream_base_u
         cell.alignment = center_alignment
         cell.border = thin_border
 
-    # Optional: Add the yellow merged cell at the top if you want it
-    # This would require shifting everything down by one row
-    # For now, keeping it simple as shown in the second image
-
     # Set sheet view options
     ws.sheet_view.showGridLines = True
     ws.sheet_view.zoomScale = 100
 
     # Save the file
-    excel_filename = "code_review_request.xlsx"
+    excel_filename = "code review request spsht.xlsx"
     wb.save(excel_filename)
     
     print(f"\nExcel file created: {os.path.abspath(excel_filename)}")
