@@ -136,7 +136,7 @@ def check_commits():
     import subprocess
     try:
         result = subprocess.run(['git', 'rev-parse', '--is-inside-work-tree'],
-                               capture_output=True, text=True)
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if result.returncode != 0:
             print("\033[0;31mError: Not in a Git repository.\033[0m")
             print("\033[0;33mHint: Please run this command inside a Git repository.\033[0m")
@@ -302,6 +302,7 @@ def create_excel_review_request(review_items, backport_base_url, upstream_base_u
         from openpyxl import Workbook
         from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
         from openpyxl.utils import get_column_letter
+        from openpyxl.worksheet.datavalidation import DataValidation  # Added for dropdown
     except ImportError:
         print("\033[0;31mError: Required library not found. Please install: pip install openpyxl\033[0m")
         return False
@@ -425,12 +426,45 @@ def create_excel_review_request(review_items, backport_base_url, upstream_base_u
         cell.alignment = center_alignment
         cell.border = thin_border
 
+    # CREATE YES/NO DROPDOWN VALIDATION FOR COLUMN D
+    if len(review_items) > 0:
+        try:
+            # Calculate the range dynamically based on number of commits
+            last_row = 2 + len(review_items)
+            validation_range = f"D3:D{last_row}"
+            
+            # Create data validation with multiple format attempts
+            dv = DataValidation(
+                type="list",
+                formula1='"yes,no"',  # Try this format first
+                showDropDown=True,
+                allowBlank=True
+            )
+            dv.error = 'Please select yes or no'
+            dv.errorTitle = 'Invalid Entry'
+            dv.prompt = 'Please select yes or no from the dropdown'
+            dv.promptTitle = 'Approval Status'
+            
+            # Apply validation to the exact range of data rows
+            dv.add(validation_range)
+            ws.add_data_validation(dv)
+            
+            # ALSO: Add a demo entry in D3 to show it works
+            ws['D3'].value = "yes"  # Demo value
+            
+            print(f"✓ Added yes/no dropdown validation to range: {validation_range}")
+            print("✓ Added demo 'yes' value in D3 to show dropdown functionality")
+            
+        except Exception as e:
+            print(f"⚠ Warning: Could not add dropdown validation: {e}")
+            print("You can manually add dropdowns using Data → Data Validation")
+
     # Set sheet view options
     ws.sheet_view.showGridLines = True
     ws.sheet_view.zoomScale = 100
 
-    # Save the file
-    excel_filename = "code review request spsht.xlsx"
+    # Save the file - FIXED FILENAME
+    excel_filename = "code review request sphst.xlsx"
     wb.save(excel_filename)
     
     print(f"\nExcel file created: {os.path.abspath(excel_filename)}")
@@ -460,7 +494,7 @@ def create_review_request():
             # Try different ways to check if we're in a git repo
             try:
                 result = subprocess.run([git_cmd, 'rev-parse', '--is-inside-work-tree'],
-                                       capture_output=True, text=True, shell=True)
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
                 if result.returncode != 0:
                     print("\033[0;31mError: Not in a Git repository.\033[0m")
                     print("\033[0;33mHint: Please run this command inside a Git repository.\033[0m")
@@ -469,7 +503,7 @@ def create_review_request():
                 try:
                     # Alternative check using 'git status'
                     result = subprocess.run([git_cmd, 'status'],
-                                          capture_output=True, text=True, shell=True)
+                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
                     if result.returncode != 0:
                         print("\033[0;31mError: Not in a Git repository.\033[0m")
                         print("\033[0;33mHint: Please run this command inside a Git repository.\033[0m")
@@ -481,7 +515,7 @@ def create_review_request():
         else:
             # Regular environment check
             result = subprocess.run(['git', 'rev-parse', '--is-inside-work-tree'],
-                                  capture_output=True, text=True)
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             if result.returncode != 0:
                 print("\033[0;31mError: Not in a Git repository.\033[0m")
                 print("\033[0;33mHint: Please run this command inside a Git repository.\033[0m")
@@ -591,11 +625,13 @@ def create_review_request():
     try:
         if is_mobaxterm:
             # Use shell=True for MobaXterm to ensure command works
-            git_log_output = subprocess.run(git_log_cmd, capture_output=True, text=True, check=True, shell=True)
+            git_log_output = subprocess.run(git_log_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, shell=True)
         else:
-            git_log_output = subprocess.run(git_log_cmd, capture_output=True, text=True, check=True)
+            git_log_output = subprocess.run(git_log_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
 
-        commits_raw = git_log_output.stdout.split('---COMMIT_SEPARATOR---')
+        # Convert bytes to string (for older Python versions)
+        stdout_text = git_log_output.stdout.decode('utf-8') if isinstance(git_log_output.stdout, bytes) else git_log_output.stdout
+        commits_raw = stdout_text.split('---COMMIT_SEPARATOR---')
         commits_raw = [c.strip() for c in commits_raw if c.strip()]
     except subprocess.CalledProcessError as e:
         print(f"\033[0;31mError executing git log command: {e}\033[0m")
